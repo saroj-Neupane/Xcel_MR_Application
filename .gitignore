@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+*.whl
+
+# PyInstaller
+*.spec.bak
+*.manifest
+*.spec~
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Application specific
+last_paths.json
+app.log
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Test output
+TEST_FILES_XCEL/output/
+TEST_FILES_XCEL/
+
+*.exe
