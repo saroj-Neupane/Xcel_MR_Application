@@ -10,7 +10,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('xcel_config.json', '.'),  # Include config file in root of bundle
+        (str(base_dir / 'xcel_config.json'), '.'),  # Include config file in root of bundle
         ('src', 'src'),  # Include entire src directory
         ('static', 'static'),  # Include static directory with icon
     ],

@@ -849,7 +849,11 @@ TIPS:
     
     def select_files_from_zip(self):
         """Select a ZIP file that contains the Node/Section/Connection and Midspan files."""
-        initial_dir = self.last_directory if hasattr(self, 'last_directory') else ""
+        downloads_dir = Path.home() / "Downloads"
+        if downloads_dir.exists():
+            initial_dir = str(downloads_dir)
+        else:
+            initial_dir = self.last_directory if hasattr(self, 'last_directory') else ""
         zip_path = filedialog.askopenfilename(
             title="Select ZIP File Containing Input Workbooks",
             filetypes=[("ZIP files", "*.zip"), ("All files", "*.*")],
