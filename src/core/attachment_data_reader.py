@@ -76,70 +76,86 @@ class AttachmentDataReader:
             return None
         try:
             power_company = self.config.get("power_company", "").strip().lower()
-            if not power_company:
+            keyword_map = [
+                (kw.strip().lower(), kw)
+                for kw in power_keywords
+                if isinstance(kw, str) and kw.strip()
+            ]
+            if not keyword_map:
                 return None
             
             df['company_stripped'] = df['company'].astype(str).str.strip().str.lower()
+            df['measured_stripped'] = df['measured'].astype(str).str.strip().str.lower()
             
-            power_company_pattern = r'\b' + re.escape(power_company) + r'\b'
-            power_company_rows = df[df['company_stripped'].str.contains(power_company_pattern, na=False, regex=True)]
+            if power_company:
+                power_company_pattern = r'\b' + re.escape(power_company) + r'\b'
+                company_mask = df['company_stripped'].str.contains(power_company_pattern, na=False, regex=True)
+                blank_mask = df['company_stripped'].eq('')
+                candidate_rows = df[company_mask | blank_mask].copy()
+            else:
+                power_company_pattern = None
+                company_mask = pd.Series(False, index=df.index)
+                candidate_rows = df.copy()
             
-            if power_company_rows.empty:
+            if candidate_rows.empty:
                 return None
             
-            power_company_rows = power_company_rows.copy()
-            power_company_rows['measured_stripped'] = power_company_rows['measured'].astype(str).str.strip().str.lower()
-            
-            keyword_pattern = '|'.join([re.escape(kw.strip().lower()) for kw in power_keywords])
-            power_rows = power_company_rows[
-                power_company_rows['measured_stripped'].str.contains(keyword_pattern, na=False, regex=True)
+            keyword_pattern = '|'.join([re.escape(k) for k, _ in keyword_map])
+            candidate_rows = candidate_rows[
+                candidate_rows['measured_stripped'].str.contains(keyword_pattern, na=False, regex=True)
             ]
-            
-            if power_rows.empty:
+            if candidate_rows.empty:
                 return None
             
-            power_rows['height_numeric'] = pd.to_numeric(
-                power_rows['height_in_inches'].astype(str).str.replace('"', '').str.replace('″', ''), 
+            # Determine which keyword matched each row
+            def find_keyword(measured_text):
+                for keyword_lower, keyword_original in sorted(keyword_map, key=lambda x: len(x[0]), reverse=True):
+                    if keyword_lower in measured_text:
+                        return keyword_original
+                return None
+            
+            candidate_rows['matched_keyword'] = candidate_rows['measured_stripped'].apply(find_keyword)
+            candidate_rows = candidate_rows[candidate_rows['matched_keyword'].notna()]
+            if candidate_rows.empty:
+                return None
+            
+            if power_company_pattern:
+                candidate_rows['company_matches_power'] = candidate_rows['company_stripped'].str.contains(
+                    power_company_pattern, na=False, regex=True
+                )
+            else:
+                candidate_rows['company_matches_power'] = False
+            
+            def requires_power(keyword):
+                return 'riser' in keyword.strip().lower()
+            
+            candidate_rows = candidate_rows[
+                ~(candidate_rows['matched_keyword'].apply(requires_power) & ~candidate_rows['company_matches_power'])
+            ]
+            if candidate_rows.empty:
+                return None
+            
+            candidate_rows['height_numeric'] = pd.to_numeric(
+                candidate_rows['height_in_inches'].astype(str).str.replace('"', '').str.replace('″', ''),
                 errors='coerce'
             )
-            power_rows = power_rows.dropna(subset=['height_numeric'])
+            candidate_rows = candidate_rows.dropna(subset=['height_numeric'])
+            candidate_rows = candidate_rows[candidate_rows['height_numeric'] > 0]
+            if candidate_rows.empty:
+                return None
             
-            # Filter out invalid heights (0.00 and negative heights are invalid for power attachments)
-            power_rows = power_rows[power_rows['height_numeric'] > 0]
+            min_row = candidate_rows.loc[candidate_rows['height_numeric'].idxmin()]
+            height_formatted = Utils.inches_to_feet_format(str(int(min_row['height_numeric'])))
+            height_formatted = self._format_height_for_output(height_formatted)
             
-            if not power_rows.empty:
-                min_row = power_rows.loc[power_rows['height_numeric'].idxmin()]
-                height_formatted = Utils.inches_to_feet_format(str(int(min_row['height_numeric'])))
-                # Apply output formatting based on configuration
-                height_formatted = self._format_height_for_output(height_formatted)
-
-                # Find which keyword matched the lowest power attachment
-                # Sort keywords by length (longest first) to match more specific keywords first
-                # e.g., "Secondary Drip Loop" should match before "Secondary"
-                # Keep original keywords list to preserve exact formatting
-                sorted_keywords_with_original = sorted(
-                    [(kw.strip(), kw) for kw in power_keywords], 
-                    key=lambda x: len(x[0]), 
-                    reverse=True
-                )
-                matched_keyword = None
-                measured_text = str(min_row['measured']).lower().strip()
-                for keyword_stripped, keyword_original in sorted_keywords_with_original:
-                    keyword_lower = keyword_stripped.lower()
-                    # Check if keyword is in the measured field
-                    if keyword_lower in measured_text:
-                        # Use the exact original keyword from the power_keywords list
-                        matched_keyword = keyword_original
-                        break
-                
-                result = {
-                    'height': height_formatted,
-                    'height_decimal': float(min_row['height_numeric']) / 12,
-                    'company': min_row['company'],
-                    'measured': min_row['measured'],
-                    'keyword': matched_keyword  # Add the keyword that matched
-                }
-                return result
+            result = {
+                'height': height_formatted,
+                'height_decimal': float(min_row['height_numeric']) / 12,
+                'company': min_row['company'],
+                'measured': min_row['measured'],
+                'keyword': min_row['matched_keyword']
+            }
+            return result
         except Exception as e:
             logging.error(f"Error processing power attachment for SCID {scid}: {e}")
         return None
@@ -152,14 +168,20 @@ class AttachmentDataReader:
         
         try:
             power_company = self.config.get("power_company", "").strip().lower()
-            if not power_company:
-                logging.warning(f"Power company not configured - Power Equipment extraction disabled for SCID {scid}")
+            normalized_keywords = [kw.strip().lower() for kw in power_equipment_keywords if isinstance(kw, str) and kw.strip()]
+            if not normalized_keywords:
                 return None
             
             df['company_stripped'] = df['company'].astype(str).str.strip().str.lower()
             
-            power_company_pattern = r'\b' + re.escape(power_company) + r'\b'
-            power_company_rows = df[df['company_stripped'].str.contains(power_company_pattern, na=False, regex=True)]
+            if power_company:
+                power_company_pattern = r'\b' + re.escape(power_company) + r'\b'
+                company_mask = df['company_stripped'].str.contains(power_company_pattern, na=False, regex=True)
+                blank_mask = df['company_stripped'].eq('')
+                power_company_rows = df[company_mask | blank_mask]
+            else:
+                power_company_pattern = None
+                power_company_rows = df.copy()
             
             if power_company_rows.empty:
                 return None
@@ -170,12 +192,18 @@ class AttachmentDataReader:
             # Find rows that match power equipment keywords (case-insensitive)
             all_equipment = []  # Collect all matching equipment
             # Normalize keywords to lowercase for consistent matching
-            normalized_keywords = [kw.strip().lower() for kw in power_equipment_keywords if kw.strip()]
+            normalized_keywords = [kw.strip().lower() for kw in power_equipment_keywords if isinstance(kw, str) and kw.strip()]
             
             for _, row in power_company_rows.iterrows():
                 measured = str(row.get('measured', '')).lower().strip()
+                company_stripped = str(row.get('company', '')).strip().lower()
+                company_matches_power = False
+                if power_company_pattern:
+                    company_matches_power = bool(re.search(power_company_pattern, company_stripped))
                 for normalized_keyword in normalized_keywords:
                     if normalized_keyword in measured:
+                        if self._keyword_requires_power_company(normalized_keyword) and not company_matches_power:
+                            continue
                         # Get height for this equipment - try different column names (flexible detection)
                         height_value = None
                         # First try standard column names
@@ -256,6 +284,14 @@ class AttachmentDataReader:
         
         # Return mapped display name or original keyword if no mapping exists
         return display_mappings.get(keyword_lower, keyword)
+
+    @staticmethod
+    def _keyword_requires_power_company(keyword):
+        """Determine if a keyword should only count when the power company matches."""
+        try:
+            return 'riser' in keyword.strip().lower()
+        except AttributeError:
+            return False
     
     def find_telecom_attachments(self, scid, telecom_keywords):
         """Find telecom attachments for a SCID and combine multiple heights in the same cell."""
@@ -437,7 +473,12 @@ class AttachmentDataReader:
             return None
         try:
             df['measured_stripped'] = df['measured'].astype(str).str.strip().str.lower()
-            streetlight_rows = df[df['measured_stripped'].str.contains('street light', na=False)]
+            keywords = self._get_street_light_keywords()
+            keyword_pattern = self._build_keyword_regex(keywords)
+            if keyword_pattern:
+                streetlight_rows = df[df['measured_stripped'].str.contains(keyword_pattern, na=False, regex=True)]
+            else:
+                streetlight_rows = df[df['measured_stripped'].str.contains('street light', na=False)]
             
             if streetlight_rows.empty:
                 return None
@@ -461,6 +502,25 @@ class AttachmentDataReader:
         except Exception as e:
             logging.error(f"Error processing streetlight attachment for SCID {scid}: {e}")
         return None
+    
+    def _get_street_light_keywords(self):
+        """Return configured keywords for street light detection."""
+        configured = self.config.get("street_light_keywords", [])
+        keywords = [kw.strip().lower() for kw in configured if isinstance(kw, str) and kw.strip()]
+        if not keywords:
+            keywords = ["street light"]
+        return keywords
+    
+    @staticmethod
+    def _build_keyword_regex(keywords):
+        """Build regex pattern with '*' wildcard support for keyword list."""
+        patterns = []
+        for kw in keywords:
+            escaped = re.escape(kw).replace(r'\*', '.*')
+            patterns.append(escaped)
+        if not patterns:
+            return None
+        return r'(?:' + '|'.join(patterns) + r')'
     
     def _format_height_for_output(self, height_str):
         """Format height string based on output_decimal configuration"""

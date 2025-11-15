@@ -5,6 +5,8 @@ import json
 import shutil
 import os
 import subprocess
+import zipfile
+import tempfile
 from pathlib import Path
 from tkinter import *
 from tkinter import ttk, filedialog, messagebox
@@ -35,6 +37,7 @@ class PoleMapperApp:
             # Initialize flags FIRST to prevent recursion
             self._is_saving_config = False
             self._is_initializing = True
+            self._temp_extract_dirs = []
             
             # Initialize managers and paths
             self.base_dir = Utils.get_base_directory()
@@ -297,10 +300,6 @@ TIPS:
         mappings_frame.pack(fill=BOTH, expand=True)
         self.create_mappings_editor(mappings_frame)
         
-        # Add reset button at the bottom
-        reset_frame = ttk.Frame(right_frame)
-        reset_frame.pack(fill=X, pady=(10, 0))
-        ttk.Button(reset_frame, text="Reset to Xcel Defaults", command=self.reset_to_defaults).pack(side=RIGHT)
 
     def create_left_panel(self, main_paned):
         """Create scrollable left panel"""
@@ -419,28 +418,19 @@ TIPS:
         power_equipment_frame.pack(fill=X, pady=(0, 10), padx=5)
         self.create_list_editor(power_equipment_frame, "power_equipment_keywords")
         
+        # Street Light Keywords
+        street_kw_frame = ttk.LabelFrame(self.scrollable_left_frame, text="Street Light Keywords", padding=15)
+        street_kw_frame.pack(fill=X, pady=(0, 10), padx=5)
+        self.create_list_editor(street_kw_frame, "street_light_keywords")
+        
         # Communication Keywords
         comm_kw_frame = ttk.LabelFrame(self.scrollable_left_frame, text="Communication Keywords", padding=15)
         comm_kw_frame.pack(fill=X, pady=(0, 10), padx=5)
-        
-        # Add help text for communication keywords
-        comm_help_text = ttk.Label(comm_kw_frame, 
-                                  text="Keywords used to identify communication attachments.\nEnd with * for substring matching (e.g., 'insulator*').\n'Guy' always uses exact match.",
-                                  foreground="gray", font=("TkDefaultFont", 8))
-        comm_help_text.pack(anchor=W, pady=(0, 5))
-        
         self.create_list_editor(comm_kw_frame, "comm_keywords")
         
         # Ignore SCID Keywords
         ignore_scid_frame = ttk.LabelFrame(self.scrollable_left_frame, text="Ignore SCID Keywords", padding=15)
         ignore_scid_frame.pack(fill=X, pady=(0, 10), padx=5)
-        
-        # Add help text for ignore keywords
-        help_text = ttk.Label(ignore_scid_frame, 
-                             text="Keywords to ignore when matching SCIDs in QC file.\nExample: '014 AT&T' will match as '014' if 'AT&T' is in ignore list.",
-                             foreground="gray", font=("TkDefaultFont", 8))
-        help_text.pack(anchor=W, pady=(0, 5))
-        
         self.create_list_editor(ignore_scid_frame, "ignore_scid_keywords")
 
     def create_list_editor(self, parent, config_key):
@@ -502,9 +492,13 @@ TIPS:
         header_frame = ttk.Frame(parent)
         header_frame.pack(fill=X, pady=(0, 10))
         
-        ttk.Label(header_frame, text="Element", font=("Arial", 11, "bold")).grid(row=0, column=0, sticky=W)
-        ttk.Label(header_frame, text="Attribute", font=("Arial", 11, "bold")).grid(row=0, column=1, sticky=W, padx=(20, 0))
-        ttk.Label(header_frame, text="Output Column", font=("Arial", 11, "bold")).grid(row=0, column=2, sticky=W, padx=(20, 0))
+        ttk.Label(header_frame, text="Element", font=("Arial", 11, "bold")).grid(row=0, column=0, sticky=W, padx=(5, 0))
+        ttk.Label(header_frame, text="Attribute", font=("Arial", 11, "bold")).grid(row=0, column=1, sticky=W, padx=(25, 0))
+        ttk.Label(header_frame, text="Output Column", font=("Arial", 11, "bold")).grid(row=0, column=2, sticky=W, padx=(25, 0))
+        
+        controls_frame = ttk.Frame(parent)
+        controls_frame.pack(fill=X, pady=(0, 10))
+        ttk.Button(controls_frame, text="Add Mapping", command=self.add_mapping).pack(side=LEFT)
         
         # Mappings area with scrollbar
         canvas = Canvas(parent)
@@ -549,13 +543,6 @@ TIPS:
         self.mappings_frame.bind("<Button-5>", on_mousewheel)
         
         self.populate_mappings()
-        
-        # Buttons
-        btn_frame = ttk.Frame(parent)
-        btn_frame.pack(fill=X, pady=(10, 0))
-        
-        ttk.Button(btn_frame, text="Add Mapping", command=self.add_mapping).pack(side=LEFT, padx=(0, 10))
-        ttk.Button(btn_frame, text="Reset to Defaults", command=self.reset_mappings).pack(side=LEFT)
 
     def populate_mappings(self):
         """Populate mappings"""
@@ -704,13 +691,6 @@ TIPS:
         except Exception as e:
             logging.error(f"Error deleting mapping: {e}")
 
-    def reset_mappings(self):
-        """Reset mappings to defaults"""
-        self.load_default_mappings()
-        self.populate_mappings()
-        self.config["column_mappings"] = self.mapping_data
-        self.auto_save_config()
-
     def create_process_tab(self, notebook):
         """Create processing tab"""
         process_frame = ttk.Frame(notebook)
@@ -755,19 +735,27 @@ TIPS:
         file_frame.pack(fill=X, pady=(0, 10))
         
         # Main input file
-        ttk.Label(file_frame, text="Main Input Excel File:").grid(row=0, column=0, sticky=W)
+        node_label = ttk.Label(file_frame, text="Node Section Connection File:")
+        node_label.grid(row=0, column=0, sticky=W)
+        node_label.bind("<Button-1>", lambda e: self.select_files_from_zip())
+        node_label.bind("<Enter>", lambda e: node_label.config(cursor="hand2"))
+        node_label.bind("<Leave>", lambda e: node_label.config(cursor=""))
         self.input_var = StringVar(value=self.last_paths["input_file"])
         ttk.Entry(file_frame, textvariable=self.input_var, width=50).grid(row=0, column=1, sticky=EW, padx=(10, 10))
         ttk.Button(file_frame, text="Browse", command=self.browse_input).grid(row=0, column=2)
         
         # Attachment file
-        ttk.Label(file_frame, text="Attachment Data File:").grid(row=1, column=0, sticky=W, pady=(10, 0))
+        ttk.Label(file_frame, text="Node and Midspan Height File:").grid(row=1, column=0, sticky=W, pady=(10, 0))
         self.attachment_var = StringVar(value=self.last_paths["attachment_file"])
         ttk.Entry(file_frame, textvariable=self.attachment_var, width=50).grid(row=1, column=1, sticky=EW, padx=(10, 10), pady=(10, 0))
         ttk.Button(file_frame, text="Browse", command=self.browse_attachment).grid(row=1, column=2, pady=(10, 0))
         
         # Output file
-        ttk.Label(file_frame, text="Output Template File:").grid(row=2, column=0, sticky=W, pady=(10, 0))
+        output_label = ttk.Label(file_frame, text="Output Template File:")
+        output_label.grid(row=2, column=0, sticky=W, pady=(10, 0))
+        output_label.bind("<Button-1>", lambda e: self.open_template())
+        output_label.bind("<Enter>", lambda e: output_label.config(cursor="hand2"))
+        output_label.bind("<Leave>", lambda e: output_label.config(cursor=""))
         self.output_var = StringVar(value=self.last_paths["output_file"])
         ttk.Entry(file_frame, textvariable=self.output_var, width=50).grid(row=2, column=1, sticky=EW, padx=(10, 10), pady=(10, 0))
         ttk.Button(file_frame, text="Browse", command=self.browse_output).grid(row=2, column=2, pady=(10, 0))
@@ -858,6 +846,56 @@ TIPS:
         if filename:
             self.output_var.set(filename)
             self.auto_save_config()
+    
+    def select_files_from_zip(self):
+        """Select a ZIP file that contains the Node/Section/Connection and Midspan files."""
+        initial_dir = self.last_directory if hasattr(self, 'last_directory') else ""
+        zip_path = filedialog.askopenfilename(
+            title="Select ZIP File Containing Input Workbooks",
+            filetypes=[("ZIP files", "*.zip"), ("All files", "*.*")],
+            initialdir=initial_dir
+        )
+        if not zip_path:
+            return
+        
+        self.last_directory = os.path.dirname(zip_path)
+        
+        try:
+            zip_path_obj = Path(zip_path)
+            extract_dir = zip_path_obj.parent / f"{zip_path_obj.stem}_extracted"
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+            self._temp_extract_dirs.append(str(extract_dir))
+            
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            logging.info(f"Extracted ZIP to directory: {extract_dir}")
+            
+            node_file, midspan_file = self._find_zip_targets(extract_dir)
+            if node_file:
+                self.input_var.set(node_file)
+            if midspan_file:
+                self.attachment_var.set(midspan_file)
+            self.auto_save_config()
+        except zipfile.BadZipFile:
+            logging.error("The selected file is not a valid ZIP archive.")
+        except Exception as e:
+            logging.error(f"Failed to extract ZIP: {e}")
+
+    def open_template(self):
+        """Open the currently selected template file"""
+        template_path = self.output_var.get().strip()
+        if not template_path:
+            messagebox.showwarning("Template Missing", "Please select an output template file first.")
+            return
+        if not Path(template_path).exists():
+            messagebox.showerror("Template Not Found", f"The template file was not found:\n{template_path}")
+            return
+        try:
+            self.open_output_file(template_path)
+        except Exception as e:
+            logging.warning(f"Failed to open template file: {e}")
 
     def browse_existing_reports(self):
         """Browse for existing reports folder"""
@@ -889,6 +927,33 @@ TIPS:
         if filename:
             self.alden_qc_var.set(filename)
             self.auto_save_config()
+    
+    def _find_zip_targets(self, extract_dir):
+        """Locate Node/Section/Connection and Midspan files within extracted directory."""
+        try:
+            excel_files = list(Path(extract_dir).rglob("*.xls*"))
+            if not excel_files:
+                return None, None
+            
+            def match_keywords(path, keywords):
+                name = path.name.lower()
+                return all(keyword in name for keyword in keywords)
+            
+            node_keywords = ["node", "section", "connection"]
+            midspan_keywords = ["node", "midspan", "height"]
+            
+            node_file = next((str(p) for p in excel_files if match_keywords(p, node_keywords)), None)
+            midspan_file = next((str(p) for p in excel_files if match_keywords(p, midspan_keywords)), None)
+            
+            if not node_file and excel_files:
+                node_file = str(excel_files[0])
+            if not midspan_file and len(excel_files) > 1:
+                midspan_file = str(excel_files[1])
+            
+            return node_file, midspan_file
+        except Exception as e:
+            logging.debug(f"Error scanning extracted ZIP contents: {e}")
+            return None, None
     
     def _clean_path(self, p):
         """Return normalized absolute POSIX-style path string"""
@@ -1399,19 +1464,6 @@ TIPS:
         except Exception as e:
             logging.error(f"Error refreshing UI: {e}")
 
-    def reset_to_defaults(self):
-        """Reset current configuration to Xcel defaults"""
-        try:
-            # No confirmation dialog - just reset
-            self.config = self.config_manager.get_default_config()
-            self.mapping_data = self.config.get("column_mappings", [])
-            self.update_ui_values()
-            self.update_ui_state()
-            self.auto_save_config()
-            logging.info("Configuration reset to Xcel defaults!")
-        except Exception as e:
-            logging.error(f"Failed to reset configuration: {e}")
-
     def save_config(self):
         """Save current configuration"""
         try:
@@ -1428,6 +1480,13 @@ TIPS:
             # Save current config
             self.update_config_from_ui()
             self.save_config()
+            
+            # Clean up any temporary extraction directories
+            for temp_dir in getattr(self, '_temp_extract_dirs', []):
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception as cleanup_error:
+                    logging.debug(f"Failed to remove temp directory {temp_dir}: {cleanup_error}")
             
             logging.info("Application closing")
             self.root.destroy()

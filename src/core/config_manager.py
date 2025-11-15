@@ -47,52 +47,18 @@ class ConfigManager:
                 "communication",
                 "comm"
             ],
+            "street_light_keywords": [
+                "street light",
+                "street",
+                "streetlight",
+                "light arm"
+            ],
             "ignore_scid_keywords": [
                 "AT&T",
                 "Foreign Pole",
                 "Unknown",
                 "Xcel"
             ],
-            "telecom_keywords": {
-                "Proposed MetroNet": [
-                    "Proposed MNT",
-                    "MNT",
-                    "MetroNet"
-                ],
-                "Comcast": [
-                    "Com Cast",
-                    "Commcast",
-                    "comcast"
-                ],
-                "AT&T": [
-                    "AT&T",
-                    "ATT",
-                    "att"
-                ],
-                "Lightower": [
-                    "lightower",
-                    "Lightower"
-                ],
-                "Kellogg": [
-                    "kellogg",
-                    "Kellogg"
-                ],
-                "MCI": [
-                    "mci",
-                    "MCI"
-                ],
-                "CATV": [
-                    "CATV"
-                ],
-                "Telephone Company": [
-                    "telephone company",
-                    "telco"
-                ],
-                "Fiber": [
-                    "Fiber",
-                    "fiber"
-                ]
-            },
             "output_settings": {
                 "header_row": 1,
                 "data_start_row": 2,
@@ -100,33 +66,7 @@ class ConfigManager:
             },
             "processing_options": {
                 "open_output": True,
-                "debug_mode": False,
                 "output_decimal": True
-            },
-            "data_sources": {
-                "attachment_data": {
-                    "source": "SCID sheets",
-                    "description": "Attachment data comes exclusively from individual SCID sheets (e.g., 'SCID 123') in the attachment data file"
-                },
-                "midspan_height": {
-                    "source": "sections sheet",
-                    "description": "Midspan height data comes exclusively from the 'sections' sheet in the main input file"
-                },
-                "span_length": {
-                    "source": "connections sheet", 
-                    "description": "Span length data comes exclusively from the 'connections' sheet in the main input file"
-                },
-                "pole_tag": {
-                    "source": "pole_tag_tagtext column in nodes sheet",
-                    "description": "Pole Tag data comes exclusively from the 'pole_tag_tagtext' column in the 'nodes' sheet"
-                },
-                "pole_height_class": {
-                    "source": "pole_spec column in nodes sheet",
-                    "description": "Pole Height&Class data comes exclusively from the 'pole_spec' column in the 'nodes' sheet (e.g., '35-4 SOUTHERN PINE' -> '35/4')"
-                },
-                "single_source_only": True,
-                "blank_missing_data": True,
-                "description": "No fallback mechanisms - each data type uses only its designated source sheet. Missing data is left blank in output."
             },
             "column_mappings": [
                 [
@@ -214,8 +154,7 @@ class ConfigManager:
                     "Required",
                     "New Guy Required"
                 ]
-            ],
-            "decimal_measurements": False
+            ]
         }
     
     def load_config(self):

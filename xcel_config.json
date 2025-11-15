@@ -15,7 +15,6 @@
     "Transformer",
     "Secondary Drip Loop",
     "Riser",
-    "Capacitor",
     "CAP"
   ],
   "power_equipment_keywords": [
@@ -28,6 +27,9 @@
     "Guy",
     "Power Guy",
     "insulator*"
+  ],
+  "street_light_keywords": [
+    "street_light bottom_of_bracket"
   ],
   "ignore_scid_keywords": [
     "AT&T",
@@ -43,46 +45,6 @@
     "CENTURYLINK",
     "Transmission"
   ],
-  "telecom_keywords": {
-    "Proposed MetroNet": [
-      "Proposed MNT",
-      "MNT",
-      "MetroNet"
-    ],
-    "Comcast": [
-      "Com Cast",
-      "Commcast",
-      "comcast"
-    ],
-    "AT&T": [
-      "AT&T",
-      "ATT",
-      "att"
-    ],
-    "Lightower": [
-      "lightower",
-      "Lightower"
-    ],
-    "Kellogg": [
-      "kellogg",
-      "Kellogg"
-    ],
-    "MCI": [
-      "mci",
-      "MCI"
-    ],
-    "CATV": [
-      "CATV"
-    ],
-    "Telephone Company": [
-      "telephone company",
-      "telco"
-    ],
-    "Fiber": [
-      "Fiber",
-      "fiber"
-    ]
-  },
   "output_settings": {
     "header_row": 1,
     "data_start_row": 2,
@@ -90,33 +52,7 @@
   },
   "processing_options": {
     "open_output": true,
-    "debug_mode": false,
     "output_decimal": true
-  },
-  "data_sources": {
-    "attachment_data": {
-      "source": "SCID sheets",
-      "description": "Attachment data comes exclusively from individual SCID sheets (e.g., 'SCID 123') in the attachment data file"
-    },
-    "midspan_height": {
-      "source": "sections sheet",
-      "description": "Midspan height data comes exclusively from the 'sections' sheet in the main input file"
-    },
-    "span_length": {
-      "source": "connections sheet",
-      "description": "Span length data comes exclusively from the 'connections' sheet in the main input file"
-    },
-    "pole_tag": {
-      "source": "pole_tag_tagtext column in nodes sheet",
-      "description": "Pole Tag data comes exclusively from the 'pole_tag_tagtext' column in the 'nodes' sheet"
-    },
-    "pole_height_class": {
-      "source": "pole_spec column in nodes sheet",
-      "description": "Pole Height&Class data comes exclusively from the 'pole_spec' column in the 'nodes' sheet (e.g., '35-4 SOUTHERN PINE' -> '35/4')"
-    },
-    "single_source_only": true,
-    "blank_missing_data": true,
-    "description": "No fallback mechanisms - each data type uses only its designated source sheet. Missing data is left blank in output."
   },
   "column_mappings": [
     [
@@ -167,7 +103,7 @@
     [
       "Street Light",
       "Lowest Height",
-      "street Light"
+      "Street Light"
     ],
     [
       "comm1",
@@ -183,11 +119,6 @@
       "comm3",
       "Attachment Ht",
       "comm3"
-    ],
-    [
-      "comm4",
-      "Attachment Ht",
-      "comm4"
     ],
     [
       "Pole",
@@ -259,6 +190,5 @@
       "Lowest Type",
       "Lowest Power Type"
     ]
-  ],
-  "decimal_measurements": false
+  ]
 }

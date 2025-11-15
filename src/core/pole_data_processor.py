@@ -23,6 +23,29 @@ class PoleDataProcessor:
         self.template_scids = None  # Will store SCIDs from template
         self.template_scids_by_sheet = {}  # Will store SCIDs from template organized by sheet
     
+    def _is_end_marker(self, value):
+        """Check if a value represents an END marker in the template."""
+        if value is None:
+            return False
+        return str(value).strip().upper() == 'END'
+    
+    def _apply_end_marker(self, row_data):
+        """Ensure END marker rows preserve END placeholders for span and midspan fields."""
+        if not row_data:
+            return row_data
+        
+        to_pole_value = row_data.get('To Pole', '')
+        if not self._is_end_marker(to_pole_value):
+            return row_data
+        
+        row_data['Span Length'] = 'END'
+        
+        for key in list(row_data.keys()):
+            if 'Midspan' in key:
+                row_data[key] = 'END'
+        
+        return row_data
+    
     def read_template_scids(self, template_file_path):
         """Read SCIDs from Pole and To Pole columns in all sheets of template file"""
         try:
@@ -265,10 +288,13 @@ class PoleDataProcessor:
             logging.info(f"Processing template connection: {pole_scid} -> {to_pole_scid} (normalized: {pole_scid_norm} -> {to_pole_scid_norm})")
             
             # Check if To Pole is N/A or empty - treat as invalid connection
-            is_invalid_connection = (not to_pole_scid or 
-                                   to_pole_scid.upper() == "N/A" or 
-                                   to_pole_scid == "nan" or 
-                                   to_pole_scid.strip() == "")
+            is_invalid_connection = (
+                not to_pole_scid or 
+                self._is_end_marker(to_pole_scid) or
+                to_pole_scid.upper() == "N/A" or 
+                to_pole_scid == "nan" or 
+                to_pole_scid.strip() == ""
+            )
             
             # Find the connection data for this pair (only if not invalid)
             conn_info = None
@@ -299,6 +325,7 @@ class PoleDataProcessor:
                     # Use the original template SCIDs in the output
                     row_data['Pole'] = pole_scid
                     row_data['To Pole'] = to_pole_scid
+                    row_data = self._apply_end_marker(row_data)
                     # Store the Excel row number for precise positioning
                     row_data['_excel_row'] = excel_row
                     result_data.append(row_data)
@@ -326,10 +353,13 @@ class PoleDataProcessor:
             logging.info(f"Processing template connection: {pole_scid} -> {to_pole_scid} (normalized: {pole_scid_norm} -> {to_pole_scid_norm})")
             
             # Check if To Pole is N/A or empty - treat as invalid connection
-            is_invalid_connection = (not to_pole_scid or 
-                                   to_pole_scid.upper() == "N/A" or 
-                                   to_pole_scid == "nan" or 
-                                   to_pole_scid.strip() == "")
+            is_invalid_connection = (
+                not to_pole_scid or 
+                self._is_end_marker(to_pole_scid) or
+                to_pole_scid.upper() == "N/A" or 
+                to_pole_scid == "nan" or 
+                to_pole_scid.strip() == ""
+            )
             
             # Find the connection data for this pair (only if not invalid)
             conn_info = None
@@ -360,6 +390,7 @@ class PoleDataProcessor:
                     # Use the original template SCIDs in the output
                     row_data['Pole'] = pole_scid
                     row_data['To Pole'] = to_pole_scid
+                    row_data = self._apply_end_marker(row_data)
                     # Store the Excel row number for precise positioning
                     row_data['_excel_row'] = excel_row
                     result_data.append(row_data)
@@ -677,6 +708,7 @@ class PoleDataProcessor:
                 except Exception as e:
                     logging.error(f"Error getting attachment data for pole {pole_scid}: {e}")
             
+            row_data = self._apply_end_marker(row_data)
             result_data.append(row_data)
         
         logging.info(f"Template-only processing completed: {len(result_data)} rows")
@@ -799,18 +831,21 @@ class PoleDataProcessor:
                     # Pole -> Reference: Pole in "Pole" column, Reference in "To Pole" column
                     row_data = self._create_output_row(scid1, scid2, conn_info, node1_data, mappings['scid_to_row'], sections_df)
                     if row_data:
+                        row_data = self._apply_end_marker(row_data)
                         result_data.append(row_data)
                         logging.debug(f"Added pole->reference connection: {scid1} -> {scid2}")
                 elif node1_type == 'reference' and node2_type == 'pole':
                     # Reference -> Pole: Pole in "Pole" column, Reference in "To Pole" column
                     row_data = self._create_output_row(scid2, scid1, conn_info, node2_data, mappings['scid_to_row'], sections_df)
                     if row_data:
+                        row_data = self._apply_end_marker(row_data)
                         result_data.append(row_data)
                         logging.debug(f"Added reference->pole connection: {scid2} -> {scid1}")
                 elif node1_type == 'pole' and node2_type == 'pole':
                     # Pole -> Pole: First pole in "Pole" column, Second pole in "To Pole" column
                     row_data = self._create_output_row(scid1, scid2, conn_info, node1_data, mappings['scid_to_row'], sections_df)
                     if row_data:
+                        row_data = self._apply_end_marker(row_data)
                         result_data.append(row_data)
                         logging.debug(f"Added pole->pole connection: {scid1} -> {scid2}")
         
@@ -1119,7 +1154,9 @@ class PoleDataProcessor:
         """Create an output row for a connection involving a pole"""
         try:
             # Validate that both Pole and To Pole SCIDs are valid
-            if not pole_scid or not to_pole_scid or pole_scid.strip() == '' or to_pole_scid.strip() == '':
+            if (not pole_scid or not to_pole_scid or 
+                pole_scid.strip() == '' or to_pole_scid.strip() == '' or 
+                self._is_end_marker(to_pole_scid)):
                 logging.warning(f"Skipping row creation: invalid Pole/To Pole values - Pole='{pole_scid}', To Pole='{to_pole_scid}'")
                 return None
             
@@ -1547,15 +1584,8 @@ class PoleDataProcessor:
                                         provider = None
                                         company_str = str(row.get('company', '')).strip()
                                         
-                                        # Match to configured telecom providers
-                                        for provider_name, keywords in self.config.get("telecom_keywords", {}).items():
-                                            for keyword in keywords:
-                                                if keyword.lower() in company.lower():
-                                                    provider = provider_name
-                                                    break
-                                            if provider:
-                                                break
-                                        
+                                        # Match to configured telecom providers or fall back to company name
+                                        provider = self._match_telecom_provider(company_str)
                                         if not provider:
                                             provider = company_str if company_str else ""
                                         
@@ -1805,41 +1835,68 @@ class PoleDataProcessor:
         # Add streetlight (bottom of bracket) height
         streetlight_from_find = self.attachment_reader.find_streetlight_attachment(scid) if self.attachment_reader else None
         
-        # New: Find street light for power company, measured contains 'street'
+        # New: Find street light for power company, measured contains configured keywords
         street_light_height_processed = ""
         if self.attachment_reader:
             try:
                 df_scid_data = self.attachment_reader.get_scid_data(scid)
                 if not df_scid_data.empty:
+                    street_keywords = self._get_street_light_keywords()
+                    require_power_company = self._keywords_require_power_company(street_keywords)
                     power_company_config = self.config.get("power_company", "").strip().lower()
 
-                    if power_company_config:
+                    if not power_company_config and require_power_company:
+                        logging.debug(f"SCID {scid}: Power company not configured. Skipping street light detection for riser keywords.")
+                    else:
                         df_filtered = df_scid_data.copy()
-                        df_filtered['company_stripped'] = df_filtered['company'].astype(str).str.strip().str.lower()
-                        
-                        power_company_pattern = r'\b' + re.escape(power_company_config) + r'\b'
-                        power_company_rows = df_filtered[df_filtered['company_stripped'].str.contains(power_company_pattern, na=False, regex=True)]
+                        if power_company_config:
+                            df_filtered['company_stripped'] = df_filtered['company'].astype(str).str.strip().str.lower()
+                            power_company_pattern = r'\b' + re.escape(power_company_config) + r'\b'
+                            company_mask = df_filtered['company_stripped'].str.contains(power_company_pattern, na=False, regex=True)
+                            if require_power_company:
+                                df_filtered = df_filtered[company_mask]
+                            else:
+                                blank_mask = df_filtered['company_stripped'].eq('')
+                                df_filtered = df_filtered[company_mask | blank_mask]
 
-                        if not power_company_rows.empty:
-                            pc_rows_copy = power_company_rows.copy()
-                            pc_rows_copy['measured_stripped'] = pc_rows_copy['measured'].astype(str).str.strip().str.lower()
-                            
-                            street_rows = pc_rows_copy[pc_rows_copy['measured_stripped'].str.contains('street', na=False)]
+                        if not df_filtered.empty:
+                            df_filtered = df_filtered.copy()
+                            df_filtered['measured_stripped'] = df_filtered['measured'].astype(str).str.strip().str.lower()
+
+                            keyword_pattern = self._build_keyword_regex(street_keywords)
+                            if keyword_pattern:
+                                street_rows = df_filtered[df_filtered['measured_stripped'].str.contains(keyword_pattern, na=False, regex=True)]
+                            else:
+                                street_rows = df_filtered[df_filtered['measured_stripped'].str.contains('street', na=False)]
 
                             if not street_rows.empty:
-                                s_rows_copy = street_rows.copy()
-                                s_rows_copy['height_numeric'] = pd.to_numeric(
-                                    s_rows_copy['height_in_inches'].astype(str).str.replace('"', '').str.replace('″', ''),
-                                    errors='coerce'
+                                street_rows = street_rows.copy()
+                                street_rows['company_stripped'] = street_rows['company'].astype(str).str.strip().str.lower()
+                                if power_company_config:
+                                    company_mask = street_rows['company_stripped'].str.contains(
+                                        power_company_pattern, na=False, regex=True
+                                    )
+                                else:
+                                    company_mask = pd.Series(False, index=street_rows.index)
+
+                                requires_mask = street_rows['measured_stripped'].apply(
+                                    lambda text: self._measurement_requires_power_company(text, street_keywords)
                                 )
-                                s_rows_copy = s_rows_copy.dropna(subset=['height_numeric'])
-                                if not s_rows_copy.empty:
-                                    min_row = s_rows_copy.loc[s_rows_copy['height_numeric'].idxmin()]
-                                    street_light_height_processed = Utils.inches_to_feet_format(str(int(min_row['height_numeric'])))
-                                    # Apply output formatting based on configuration
-                                    street_light_height_processed = self._format_height_for_output(street_light_height_processed)
-                    else:
-                        logging.debug(f"SCID {scid}: Power company not configured. Skipping 'Street Light Height' processing.")
+                                street_rows = street_rows[
+                                    ~(requires_mask & ~company_mask)
+                                ]
+
+                                if not street_rows.empty:
+                                    s_rows_copy = street_rows.copy()
+                                    s_rows_copy['height_numeric'] = pd.to_numeric(
+                                        s_rows_copy['height_in_inches'].astype(str).str.replace('"', '').str.replace('″', ''),
+                                        errors='coerce'
+                                    )
+                                    s_rows_copy = s_rows_copy.dropna(subset=['height_numeric'])
+                                    if not s_rows_copy.empty:
+                                        min_row = s_rows_copy.loc[s_rows_copy['height_numeric'].idxmin()]
+                                        street_light_height_processed = Utils.inches_to_feet_format(str(int(min_row['height_numeric'])))
+                                        street_light_height_processed = self._format_height_for_output(street_light_height_processed)
             except Exception as e:
                 logging.error(f"Error processing street light height for SCID {scid}: {e}")
         
@@ -1860,10 +1917,11 @@ class PoleDataProcessor:
         # This is for the pre-existing field 'Streetlight (bottom of bracket)'
         if streetlight_from_find:
             result['Streetlight (bottom of bracket)'] = streetlight_from_find['height']
+        else:
+            result['Streetlight (bottom of bracket)'] = ''
         
         # This is for the new field 'Street Light Height'
-        if street_light_height_processed:
-            result['Street Light Height'] = street_light_height_processed
+        result['Street Light Height'] = street_light_height_processed if street_light_height_processed else ''
         
         return result
     
@@ -2039,7 +2097,7 @@ class PoleDataProcessor:
         """Check if owner matches Proposed MetroNet (case insensitive) 
            For 'power guy' keyword, still requires company/owner name to be present."""
         owner_str = str(owner).lower()
-        keywords = self.config["telecom_keywords"].get("Proposed MetroNet", [])
+        keywords = self._get_proposed_company_keywords()
         
         logging.debug(f"_match_metronet called with owner='{owner}', owner_str='{owner_str}', keywords={keywords}")
         
@@ -2053,8 +2111,13 @@ class PoleDataProcessor:
         if "power guy" in owner_str:
             # Check if any company/provider names are also present
             all_providers = set()
-            for provider_keywords in self.config["telecom_keywords"].values():
-                all_providers.update([k.lower() for k in provider_keywords])
+            telecom_keywords = self.config.get("telecom_keywords", {})
+            if telecom_keywords:
+                for provider_keywords in telecom_keywords.values():
+                    all_providers.update([k.lower() for k in provider_keywords])
+            else:
+                all_providers.update([p.lower() for p in self.config.get("telecom_providers", []) if p])
+                all_providers.update(self._get_proposed_company_keywords())
             
             # Also check power company names
             power_keywords = [k.lower() for k in self.config.get("power_keywords", [])]
@@ -2070,10 +2133,82 @@ class PoleDataProcessor:
     def _match_telecom_provider(self, owner):
         """Match owner to telecom provider (case insensitive)"""
         owner_str = str(owner).lower()
-        for provider, keywords in self.config["telecom_keywords"].items():
+        telecom_keywords = self.config.get("telecom_keywords", {})
+        for provider, keywords in telecom_keywords.items():
             if any(k.lower() in owner_str for k in keywords):
                 return provider
+        
+        # Fall back to proposed company name if telecom keywords are absent
+        if any(keyword in owner_str for keyword in self._get_proposed_company_keywords()):
+            return "Proposed MetroNet"
+        
+        # As a last resort, try matching provider names directly from telecom_providers
+        for provider in self.config.get("telecom_providers", []):
+            if provider and provider.lower() in owner_str:
+                return provider
+        
         return None
+
+    def _get_proposed_company_keywords(self):
+        """Return a set of normalized keywords for the proposed company (MetroNet)."""
+        keywords = set()
+        proposed_company = self.config.get("proposed_company", "").strip().lower()
+        
+        if proposed_company:
+            keywords.add(proposed_company)
+            
+            # Include version without leading 'proposed ' if present
+            if proposed_company.startswith("proposed "):
+                keywords.add(proposed_company[len("proposed "):])
+            
+            # Include alphanumeric-only variant
+            normalized = re.sub(r'[^a-z0-9]+', ' ', proposed_company).strip()
+            if normalized:
+                keywords.add(normalized)
+        
+        # Ensure legacy MetroNet keywords still match even if proposed company differs
+        keywords.update({"proposed metronet", "metronet", "proposed mnt", "mnt"})
+        
+        return [kw for kw in keywords if kw]
+
+    def _get_street_light_keywords(self):
+        """Get configured keywords for identifying street light measurements."""
+        configured = self.config.get("street_light_keywords", [])
+        keywords = [kw.strip().lower() for kw in configured if isinstance(kw, str) and kw.strip()]
+        if not keywords:
+            keywords = ["street"]
+        return keywords
+
+    @staticmethod
+    def _measurement_requires_power_company(measured_text, keywords):
+        """Check if measured text contains a keyword that requires power company validation."""
+        measured_lower = str(measured_text).strip().lower()
+        for keyword in keywords:
+            if not keyword:
+                continue
+            keyword_lower = keyword.strip().lower()
+            if 'riser' in keyword_lower and keyword_lower in measured_lower:
+                return True
+        return False
+
+    @staticmethod
+    def _keywords_require_power_company(keywords):
+        """Determine if keyword list requires power company context (e.g., contains 'riser')."""
+        for kw in keywords:
+            if isinstance(kw, str) and 'riser' in kw.lower():
+                return True
+        return False
+
+    @staticmethod
+    def _build_keyword_regex(keywords):
+        """Build a regex pattern supporting '*' wildcard for given keywords."""
+        patterns = []
+        for kw in keywords:
+            escaped = re.escape(kw).replace(r'\*', '.*')
+            patterns.append(escaped)
+        if not patterns:
+            return None
+        return r'(?:' + '|'.join(patterns) + r')'
     
     def _get_pole_address(self, node):
         """Get pole address from geocoding cache or service"""
@@ -2395,7 +2530,7 @@ class PoleDataProcessor:
                     pole = row_data.get('Pole', '')
                     to_pole = row_data.get('To Pole', '')
                     
-                    if pole and to_pole:
+                    if pole and to_pole and not self._is_end_marker(to_pole):
                         # Get QC span length
                         qc_span = self.qc_reader.get_qc_span_length(pole, to_pole)
                         excel_span = row_data.get('Span Length', '')
@@ -2417,7 +2552,9 @@ class PoleDataProcessor:
                                 tolerance_updates += 1
                             else:
                                 logging.info(f"Excel span length retained: {pole} -> {to_pole}: '{excel_span}' (QC: {qc_span}, tolerance: {tolerance})")
-                            
+                    
+                    # Ensure END markers remain intact after any tolerance logic
+                    self._apply_end_marker(row_data)
                 
                 logging.info(f"Completed span length tolerance check: {tolerance_updates} updates applied")
             
@@ -3020,6 +3157,7 @@ class PoleDataProcessor:
             )
             
             if row_data:
+                row_data = self._apply_end_marker(row_data)
                 result_data.append(row_data)
                 logging.debug(f"Added QC connection (exact original): {qc_pole_orig} -> {qc_to_pole_orig}")
             else:
@@ -3039,6 +3177,7 @@ class PoleDataProcessor:
                     'Pole Address': '',
                     'Notes': 'QC connection - limited data available'
                 }
+                minimal_row = self._apply_end_marker(minimal_row)
                 result_data.append(minimal_row)
                 logging.debug(f"Added minimal QC connection: {qc_pole_orig} -> {qc_to_pole_orig}")
         
