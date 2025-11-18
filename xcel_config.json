@@ -26,10 +26,13 @@
   "comm_keywords": [
     "Guy",
     "Power Guy",
-    "insulator*"
+    "insulator*",
+    "fiber",
+    "telco",
+    "catv"
   ],
   "street_light_keywords": [
-    "street_light bottom_of_bracket"
+    "street"
   ],
   "ignore_scid_keywords": [
     "AT&T",

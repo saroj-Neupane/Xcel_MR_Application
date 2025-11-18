@@ -29,6 +29,29 @@ class PoleDataProcessor:
             return False
         return str(value).strip().upper() == 'END'
     
+    def _normalize_pole_number(self, pole_number):
+        """
+        Normalize pole number by removing leading zeros
+        This ensures that '063' and '63' are treated as the same pole
+        
+        Args:
+            pole_number (str or int): Pole number to normalize
+            
+        Returns:
+            str: Normalized pole number
+        """
+        if not pole_number:
+            return ""
+        # Convert to string and remove leading zeros
+        pole_str = str(pole_number).strip()
+        # Handle numeric strings only (skip if it contains non-numeric characters after the leading zeros)
+        # Remove leading zeros but keep at least one digit
+        if pole_str.startswith('0') and len(pole_str) > 1:
+            pole_str = pole_str.lstrip('0')
+        # Ensure we return at least "0" if all zeros were stripped
+        result = pole_str if pole_str else "0"
+        return result
+    
     def _apply_end_marker(self, row_data):
         """Ensure END marker rows preserve END placeholders for span and midspan fields."""
         if not row_data:
@@ -2459,11 +2482,28 @@ class PoleDataProcessor:
                 logging.info("No QC file - sorting main sheet by pole SCID")
 
             # Create data cache for QC sheet population
+            # Normalize pole numbers when storing to ensure consistent lookups
             self._processed_data_cache = {}
-            for row in sorted_data:
+            normalization_log = []  # Track first few normalizations for debugging
+            for idx, row in enumerate(sorted_data):
                 pole = row.get('Pole', '').strip()
                 if pole:
-                    self._processed_data_cache[pole] = row
+                    # Normalize pole number (remove leading zeros)
+                    pole_normalized = self._normalize_pole_number(pole)
+                    
+                    # Log first few normalizations for debugging
+                    if idx < 5 or pole.startswith('0'):
+                        normalization_log.append(f"'{pole}' -> '{pole_normalized}'")
+                    
+                    self._processed_data_cache[pole_normalized] = row
+            
+            # Log cache for debugging
+            if self._processed_data_cache:
+                sample_poles = list(self._processed_data_cache.keys())[:10]
+                logging.info(f"Processed data cache populated with {len(self._processed_data_cache)} poles")
+                logging.info(f"Sample normalized pole keys in cache: {sample_poles}")
+                if normalization_log:
+                    logging.info(f"Sample pole normalizations: {', '.join(normalization_log[:10])}")
 
             # Check if output file exists, if not, try to create it from template
             from pathlib import Path
@@ -2636,6 +2676,14 @@ class PoleDataProcessor:
             if self.alden_qc_reader and self.alden_qc_reader.is_active():
                 logging.info("Alden QC reader is active - performing Alden comparison")
                 self._apply_alden_qc_comparison(wb)
+                
+                # Populate "From Alden" sheet with data from Alden file
+                logging.info("Populating 'From Alden' sheet with Alden file data")
+                self._populate_from_alden_sheet(wb)
+                
+                # Apply highlighting to "From Alden" sheet comparing with processed data
+                logging.info("Applying highlighting to 'From Alden' sheet")
+                self._apply_from_alden_highlighting(wb)
             else:
                 logging.info("Alden QC reader not active - skipping Alden comparison")
 
@@ -2816,7 +2864,9 @@ class PoleDataProcessor:
             
             # Check if we have processed data for this pole
             if hasattr(self, '_processed_data_cache'):
-                pole_data = self._processed_data_cache.get(pole)
+                # Normalize pole number for consistent lookup
+                pole_normalized = self._normalize_pole_number(pole)
+                pole_data = self._processed_data_cache.get(pole_normalized)
                 if pole_data:
                     # Populate Pole Address if missing
                     if 'Pole Address (if available)' in existing_headers and 'Pole Address (if available)' not in column_mapping:
@@ -3578,7 +3628,7 @@ class PoleDataProcessor:
             import traceback
             logging.error(traceback.format_exc())
     
-    def _compare_metronet_attachment_height(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill):
+    def _compare_metronet_attachment_height(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill, data_reader=None):
         """
         Compare MetroNet attachment height from template with QC data
         
@@ -3588,8 +3638,11 @@ class PoleDataProcessor:
         try:
             from .utils import Utils
             
+            # Use provided data_reader or fall back to self.alden_qc_reader
+            reader = data_reader if data_reader else self.alden_qc_reader
+            
             template_value = alden_sheet.cell(row=row_idx, column=col_idx).value
-            qc_value = self.alden_qc_reader.get_metronet_attachment_height(pole_str)
+            qc_value = reader.get_metronet_attachment_height(pole_str)
             
             if not qc_value:
                 # No QC data available, skip
@@ -3621,7 +3674,7 @@ class PoleDataProcessor:
             logging.error(f"Error comparing MetroNet attachment height for pole {pole_str}: {e}")
             return None
     
-    def _compare_metronet_midspan_height(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill):
+    def _compare_metronet_midspan_height(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill, data_reader=None):
         """
         Compare MetroNet midspan height from template with QC data
         
@@ -3631,8 +3684,11 @@ class PoleDataProcessor:
         try:
             from .utils import Utils
             
+            # Use provided data_reader or fall back to self.alden_qc_reader
+            reader = data_reader if data_reader else self.alden_qc_reader
+            
             template_value = alden_sheet.cell(row=row_idx, column=col_idx).value
-            qc_value = self.alden_qc_reader.get_metronet_midspan_height(pole_str)
+            qc_value = reader.get_metronet_midspan_height(pole_str)
             
             if not qc_value:
                 # No QC data available, skip
@@ -3675,7 +3731,7 @@ class PoleDataProcessor:
             logging.error(f"Error comparing MetroNet midspan height for pole {pole_str}: {e}")
             return None
     
-    def _compare_power_attachment_height(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill, street_light_col=None):
+    def _compare_power_attachment_height(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill, street_light_col=None, data_reader=None):
         """
         Compare Power attachment height from template with QC data
         Includes Street Light if it's lower than Power height for comparison
@@ -3686,8 +3742,11 @@ class PoleDataProcessor:
         try:
             from .utils import Utils
             
+            # Use provided data_reader or fall back to self.alden_qc_reader
+            reader = data_reader if data_reader else self.alden_qc_reader
+            
             template_value = alden_sheet.cell(row=row_idx, column=col_idx).value
-            qc_value = self.alden_qc_reader.get_power_attachment_height(pole_str)
+            qc_value = reader.get_power_attachment_height(pole_str)
             
             if not qc_value:
                 # No QC data available, skip but log it for debugging
@@ -3738,7 +3797,7 @@ class PoleDataProcessor:
             logging.error(f"Error comparing Power attachment height for pole {pole_str}: {e}")
             return None
     
-    def _compare_power_midspan_height(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill):
+    def _compare_power_midspan_height(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill, data_reader=None):
         """
         Compare Power midspan height from template with QC data
         
@@ -3748,8 +3807,11 @@ class PoleDataProcessor:
         try:
             from .utils import Utils
             
+            # Use provided data_reader or fall back to self.alden_qc_reader
+            reader = data_reader if data_reader else self.alden_qc_reader
+            
             template_value = alden_sheet.cell(row=row_idx, column=col_idx).value
-            qc_value = self.alden_qc_reader.get_power_midspan_height(pole_str)
+            qc_value = reader.get_power_midspan_height(pole_str)
             
             if not qc_value:
                 # No QC data available, skip
@@ -3792,7 +3854,7 @@ class PoleDataProcessor:
             logging.error(f"Error comparing Power midspan height for pole {pole_str}: {e}")
             return None
     
-    def _compare_power_type(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill):
+    def _compare_power_type(self, alden_sheet, row_idx, pole_str, col_idx, match_fill, mismatch_fill, data_reader=None):
         """
         Compare Power Type from template with QC AttachmentType using substring matching
         
@@ -3800,8 +3862,11 @@ class PoleDataProcessor:
             dict: {'matches': count, 'mismatches': count} or None if no comparison done
         """
         try:
+            # Use provided data_reader or fall back to self.alden_qc_reader
+            reader = data_reader if data_reader else self.alden_qc_reader
+            
             template_value = alden_sheet.cell(row=row_idx, column=col_idx).value
-            qc_attachment_type = self.alden_qc_reader.get_power_attachment_type(pole_str)
+            qc_attachment_type = reader.get_power_attachment_type(pole_str)
             
             if not qc_attachment_type:
                 # No QC data available, skip
@@ -3871,7 +3936,7 @@ class PoleDataProcessor:
             logging.error(f"Error comparing Power Type for pole {pole_str}: {e}")
             return None
     
-    def _compare_comm_attachment_height(self, alden_sheet, row_idx, pole_str, col_idx, comm_number, match_fill, mismatch_fill):
+    def _compare_comm_attachment_height(self, alden_sheet, row_idx, pole_str, col_idx, comm_number, match_fill, mismatch_fill, data_reader=None):
         """
         Compare communication attachment height from template with QC data
         
@@ -3881,8 +3946,11 @@ class PoleDataProcessor:
         try:
             from .utils import Utils
             
+            # Use provided data_reader or fall back to self.alden_qc_reader
+            reader = data_reader if data_reader else self.alden_qc_reader
+            
             template_value = alden_sheet.cell(row=row_idx, column=col_idx).value
-            qc_value = self.alden_qc_reader.get_comm_attachment_height(pole_str, comm_number)
+            qc_value = reader.get_comm_attachment_height(pole_str, comm_number)
             
             if not qc_value:
                 # No QC data available, skip
@@ -3914,7 +3982,7 @@ class PoleDataProcessor:
             logging.error(f"Error comparing Comm{comm_number} attachment height for pole {pole_str}: {e}")
             return None
     
-    def _compare_comm_midspan_height(self, alden_sheet, row_idx, pole_str, col_idx, comm_number, match_fill, mismatch_fill):
+    def _compare_comm_midspan_height(self, alden_sheet, row_idx, pole_str, col_idx, comm_number, match_fill, mismatch_fill, data_reader=None):
         """
         Compare communication midspan height from template with QC data
         
@@ -3924,8 +3992,11 @@ class PoleDataProcessor:
         try:
             from .utils import Utils
             
+            # Use provided data_reader or fall back to self.alden_qc_reader
+            reader = data_reader if data_reader else self.alden_qc_reader
+            
             template_value = alden_sheet.cell(row=row_idx, column=col_idx).value
-            qc_value = self.alden_qc_reader.get_comm_midspan_height(pole_str, comm_number)
+            qc_value = reader.get_comm_midspan_height(pole_str, comm_number)
             
             if not qc_value:
                 # No QC data available, skip
@@ -3967,6 +4038,1191 @@ class PoleDataProcessor:
         except Exception as e:
             logging.error(f"Error comparing Comm{comm_number} midspan height for pole {pole_str}: {e}")
             return None
+
+    def _populate_from_alden_sheet(self, workbook):
+        """
+        Create and populate 'From Alden' sheet with data from Alden file
+        Only populates columns with exact match (case insensitive)
+        Preserves original formatting of template sheet
+        
+        Args:
+            workbook: openpyxl workbook object
+        """
+        try:
+            import re
+            from openpyxl.utils import get_column_letter
+            
+            # Get raw DataFrame from Alden file
+            alden_df = self.alden_qc_reader.get_raw_dataframe()
+            if alden_df is None or alden_df.empty:
+                logging.warning("No Alden file data available to populate 'From Alden' sheet")
+                return
+            
+            # Sort by DesignSketchReferenceNumber (numeric, ignoring leading zeros)
+            if 'DesignSketchReferenceNumber' in alden_df.columns:
+                def numeric_sort_key(value):
+                    """Convert value to integer for sorting, ignoring leading zeros"""
+                    if pd.isna(value) or value is None:
+                        return float('inf')  # Put None/NaN values at the end
+                    try:
+                        # Convert to string, strip whitespace, then to int (ignores leading zeros)
+                        return int(str(value).strip())
+                    except (ValueError, TypeError):
+                        # If can't convert to int, put at the end
+                        return float('inf')
+                
+                # Create a temporary column for sorting
+                alden_df = alden_df.copy()
+                alden_df['_sort_key'] = alden_df['DesignSketchReferenceNumber'].apply(numeric_sort_key)
+                alden_df = alden_df.sort_values('_sort_key', ascending=True)
+                alden_df = alden_df.drop('_sort_key', axis=1)
+                logging.info("Sorted 'From Alden' data by DesignSketchReferenceNumber (numeric, ignoring leading zeros)")
+            else:
+                logging.warning("'DesignSketchReferenceNumber' column not found in Alden data - skipping sort")
+            
+            # Check if "From Alden" sheet exists, if not create it
+            sheet_name = "From Alden"
+            if sheet_name not in workbook.sheetnames:
+                logging.warning(f"'{sheet_name}' sheet not found in template. Please create it with the desired columns.")
+                return
+            
+            from_alden_sheet = workbook[sheet_name]
+            logging.info(f"Found existing '{sheet_name}' sheet")
+            
+            # Find header row in the "From Alden" sheet (try rows 1, 2, 3)
+            header_row = None
+            template_headers = {}  # Map header name to column index
+            
+            for row_num in [1, 2, 3]:
+                headers_found = {}
+                for col_idx in range(1, min(from_alden_sheet.max_column + 1, 100)):
+                    cell_value = from_alden_sheet.cell(row=row_num, column=col_idx).value
+                    if cell_value:
+                        # Normalize header text for matching
+                        header_text = re.sub(r"\s+", " ", str(cell_value).replace("\n", " ")).strip()
+                        if header_text:
+                            headers_found[header_text] = col_idx
+                
+                if headers_found:
+                    header_row = row_num
+                    template_headers = headers_found
+                    logging.info(f"Found headers in '{sheet_name}' sheet at row {header_row}: {len(headers_found)} columns")
+                    break
+            
+            if not template_headers:
+                logging.warning(f"No headers found in '{sheet_name}' sheet")
+                return
+            
+            # Create column mapping: Alden file column -> Template sheet column index
+            # Only exact match (case insensitive)
+            column_mapping = {}  # Map Alden column name to template column index
+            alden_columns = list(alden_df.columns)
+            
+            for alden_col in alden_columns:
+                alden_col_normalized = re.sub(r"\s+", " ", str(alden_col).replace("\n", " ")).strip().lower()
+                
+                for template_header, template_col_idx in template_headers.items():
+                    template_header_normalized = re.sub(r"\s+", " ", str(template_header).replace("\n", " ")).strip().lower()
+                    
+                    # Exact match only (case insensitive)
+                    if alden_col_normalized == template_header_normalized:
+                        column_mapping[alden_col] = template_col_idx
+                        logging.debug(f"Matched column '{alden_col}' -> '{template_header}' (column {template_col_idx})")
+                        break
+            
+            if not column_mapping:
+                logging.warning(f"No matching columns found between Alden file and '{sheet_name}' sheet")
+                return
+            
+            logging.info(f"Column mapping complete: {len(column_mapping)} columns matched (exact match only)")
+            
+            # Determine data start row
+            data_start_row = header_row + 1
+            
+            # Clear existing data values only (preserve formatting)
+            # Instead of deleting rows, clear cell values to preserve formatting
+            max_existing_row = from_alden_sheet.max_row
+            if max_existing_row >= data_start_row:
+                for row_idx in range(data_start_row, max_existing_row + 1):
+                    for template_col_idx in column_mapping.values():
+                        cell = from_alden_sheet.cell(row=row_idx, column=template_col_idx)
+                        # Only clear the value, preserve formatting
+                        cell.value = None
+            
+            # Fill data from Alden file (only in matched columns)
+            rows_written = 0
+            for alden_row_idx, (_, alden_row) in enumerate(alden_df.iterrows(), start=0):
+                excel_row = data_start_row + alden_row_idx
+                
+                for alden_col, template_col_idx in column_mapping.items():
+                    value = alden_row.get(alden_col)
+                    # Convert NaN to None/empty
+                    if pd.isna(value):
+                        value = None
+                    else:
+                        value = str(value).strip() if value else None
+                    
+                    # Get the cell and set value only (preserves formatting)
+                    cell = from_alden_sheet.cell(row=excel_row, column=template_col_idx)
+                    cell.value = value
+                
+                rows_written += 1
+            
+            logging.info(f"Successfully populated '{sheet_name}' sheet with {rows_written} rows from Alden file (only exact matching columns)")
+            
+        except Exception as e:
+            logging.error(f"Error populating 'From Alden' sheet: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+
+    def _apply_from_alden_highlighting(self, workbook):
+        """
+        Apply highlighting to 'From Alden' sheet by comparing with 'Alden' sheet
+        'From Alden' has raw Alden QC file columns, 'Alden' has processed columns
+        
+        Args:
+            workbook: openpyxl workbook object
+        """
+        try:
+            import re
+            from openpyxl.styles import PatternFill
+            
+            sheet_name = "From Alden"
+            if sheet_name not in workbook.sheetnames:
+                logging.warning(f"'{sheet_name}' sheet not found in workbook, skipping highlighting")
+                return
+            
+            # Check if Alden sheet exists to compare against
+            if "Alden" not in workbook.sheetnames:
+                logging.warning("'Alden' sheet not found in workbook - cannot compare 'From Alden' data")
+                return
+            
+            from_alden_sheet = workbook[sheet_name]
+            alden_sheet = workbook["Alden"]
+            logging.info(f"Applying highlighting to '{sheet_name}' sheet by comparing with 'Alden' sheet")
+            
+            # "From Alden" IS the Alden QC file data
+            # "Alden" sheet was already compared against Alden QC file
+            # Now mirror those comparison results to show equivalent highlighting in "From Alden"
+            
+            # Simply compare "From Alden" (QC data) with "Alden" (processed data)
+            # This will show the same match/mismatch patterns as the Alden sheet comparison
+            self._apply_from_alden_qc_comparison(from_alden_sheet, alden_sheet)
+            
+            # Apply validation rules highlighting
+            logging.info("Applying validation rules to 'From Alden' sheet")
+            self._apply_from_alden_validation_rules(from_alden_sheet)
+            
+        except Exception as e:
+            logging.error(f"Error applying highlighting to 'From Alden' sheet: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+    
+    def _apply_from_alden_qc_comparison(self, from_alden_sheet, alden_sheet):
+        """
+        Compare 'From Alden' sheet (with Alden QC file columns) against Alden sheet data
+        Shows equivalent highlighting as the Alden sheet comparison
+        'From Alden' has columns like: DesignSketchReferenceNumber, MakeReadyNotes, _Height, MidSpan, CompanyName, etc.
+        
+        Args:
+            from_alden_sheet: openpyxl worksheet for 'From Alden' sheet
+            alden_sheet: openpyxl worksheet for 'Alden' sheet
+        """
+        try:
+            import re
+            from openpyxl.styles import PatternFill
+            
+            logging.info("Comparing 'From Alden' sheet with 'Alden' sheet to show equivalent highlighting")
+            
+            # Define fill colors (same as Alden sheet comparison)
+            match_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # Green
+            mismatch_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # Red
+            not_found_fill = PatternFill(start_color="B3D9FF", end_color="B3D9FF", fill_type="solid")  # Blue
+            
+            # Build lookup from Alden sheet: pole+company -> data
+            alden_data = self._build_alden_sheet_lookup(alden_sheet)
+            
+            # Find headers - Alden QC file column names
+            pole_col = None  # DesignSketchReferenceNumber
+            mr_notes_col = None  # MakeReadyNotes
+            company_col = None  # CompanyName
+            height_col = None  # _Height
+            midspan_col = None  # MidSpan
+            attachment_type_col = None  # AttachmentType
+            status_col = None  # Status
+            detected_header_row = None
+            
+            for row_num in [1, 2, 3]:
+                for col_idx in range(1, min(from_alden_sheet.max_column + 1, 100)):
+                    cell_value = from_alden_sheet.cell(row=row_num, column=col_idx).value
+                    if cell_value:
+                        header_text = str(cell_value).strip()
+                        
+                        # Match Alden QC file column names exactly
+                        if header_text == 'DesignSketchReferenceNumber':
+                            pole_col = col_idx
+                            detected_header_row = row_num
+                        elif header_text == 'MakeReadyNotes':
+                            mr_notes_col = col_idx
+                        elif header_text == 'CompanyName':
+                            company_col = col_idx
+                        elif header_text == '_Height':
+                            height_col = col_idx
+                        elif header_text == 'MidSpan':
+                            midspan_col = col_idx
+                        elif header_text == 'AttachmentType':
+                            attachment_type_col = col_idx
+                        elif header_text == 'Status':
+                            status_col = col_idx
+                
+                if pole_col:
+                    break
+            
+            if not pole_col:
+                logging.warning("Could not find 'DesignSketchReferenceNumber' column in 'From Alden' sheet")
+                return
+            
+            logging.info(f"Found Alden QC columns at row {detected_header_row}: Pole={pole_col}, MR_Notes={mr_notes_col}, Company={company_col}, Height={height_col}, MidSpan={midspan_col}, Status={status_col}")
+            
+            # Find data range
+            data_start = detected_header_row + 1 if detected_header_row else 2
+            max_row = from_alden_sheet.max_row
+            
+            # Group rows by pole to compare against consolidated Alden sheet data
+            # Alden sheet has one row per pole, but From Alden has multiple rows per pole (one per company/attachment)
+            poles_processed = set()
+            total_comparisons = 0
+            matches = 0
+            mismatches = 0
+            not_found = 0
+            skipped_not_in_field = 0
+            
+            logging.info(f"Starting row-by-row comparison - data rows {data_start} to {max_row}")
+            
+            # Log sample of what we're comparing against
+            if alden_data:
+                sample_pole = list(alden_data.keys())[0]
+                sample_data = alden_data[sample_pole]
+                logging.info(f"Sample Alden data for pole {sample_pole}: {list(sample_data.keys())}")
+            
+            for row_idx in range(data_start, max_row + 1):
+                pole_value = from_alden_sheet.cell(row=row_idx, column=pole_col).value
+                if not pole_value:
+                    continue
+                
+                pole_str = str(pole_value).strip()
+                pole_normalized = self._normalize_pole_number(pole_str)
+                
+                # Log first occurrence of each pole
+                if pole_normalized not in poles_processed:
+                    poles_processed.add(pole_normalized)
+                    if len(poles_processed) <= 3:
+                        logging.info(f"  Processing pole {pole_str} (normalized: {pole_normalized})")
+                
+                # Check if pole exists in Alden sheet
+                if pole_normalized not in alden_data:
+                    not_found += 1
+                    from_alden_sheet.cell(row=row_idx, column=pole_col).fill = not_found_fill
+                    if len(poles_processed) <= 3:
+                        logging.info(f"    Row {row_idx}: Pole {pole_str} NOT found in Alden sheet (blue)")
+                    continue
+                
+                alden_pole_data = alden_data[pole_normalized]
+                
+                # Compare available fields
+                # MR Notes comparison (case-insensitive)
+                if mr_notes_col:
+                    from_alden_value = from_alden_sheet.cell(row=row_idx, column=mr_notes_col).value
+                    from_alden_notes = str(from_alden_value).strip() if from_alden_value else ""
+                    
+                    # Extract text after colon
+                    if ':' in from_alden_notes:
+                        from_alden_notes = from_alden_notes.split(':', 1)[1].strip()
+                    
+                    alden_notes = alden_pole_data.get('mr_notes', '')
+                    
+                    # Case-insensitive comparison
+                    if from_alden_notes.lower() == alden_notes.lower():
+                        from_alden_sheet.cell(row=row_idx, column=mr_notes_col).fill = match_fill
+                        matches += 1
+                    elif from_alden_notes or alden_notes:
+                        from_alden_sheet.cell(row=row_idx, column=mr_notes_col).fill = mismatch_fill
+                        mismatches += 1
+                    
+                    total_comparisons += 1
+                
+                # Get company and status for this row (needed for both height and midspan)
+                company = ""
+                if company_col:
+                    company = from_alden_sheet.cell(row=row_idx, column=company_col).value
+                    company = str(company).strip() if company else ""
+                
+                status = ""
+                if status_col:
+                    status = from_alden_sheet.cell(row=row_idx, column=status_col).value
+                    status = str(status).strip() if status else ""
+                
+                # Skip height and midspan comparison if Status = 'Not in Field' (case-insensitive)
+                skip_height_comparison = status.lower() == 'not in field'
+                
+                if skip_height_comparison:
+                    skipped_not_in_field += 1
+                    if len(poles_processed) <= 2:
+                        logging.info(f"    Row {row_idx}: Skipping height/midspan comparison (Status = 'Not in Field')")
+                
+                # Height comparison - map to appropriate field based on CompanyName (case-insensitive)
+                # Skip if Status = 'Not in Field'
+                if height_col and company and not skip_height_comparison:
+                    from_alden_height = from_alden_sheet.cell(row=row_idx, column=height_col).value
+                    from_alden_height_str = str(from_alden_height).strip() if from_alden_height else ""
+                    
+                    if from_alden_height_str and from_alden_height_str.lower() != 'nan':
+                        # Compare based on company (case-insensitive)
+                        found_match = False
+                        
+                        if "metronet fiber llc" in company.lower():
+                            alden_height = alden_pole_data.get('metro_attach', '')
+                            if alden_height and from_alden_height_str.lower() == alden_height.lower():
+                                from_alden_sheet.cell(row=row_idx, column=height_col).fill = match_fill
+                                matches += 1
+                                found_match = True
+                            elif alden_height:
+                                from_alden_sheet.cell(row=row_idx, column=height_col).fill = mismatch_fill
+                                mismatches += 1
+                                found_match = True
+                        elif "xcel energy" in company.lower():
+                            alden_height = alden_pole_data.get('power_attach', '')
+                            if alden_height and from_alden_height_str.lower() == alden_height.lower():
+                                from_alden_sheet.cell(row=row_idx, column=height_col).fill = match_fill
+                                matches += 1
+                                found_match = True
+                            elif alden_height:
+                                from_alden_sheet.cell(row=row_idx, column=height_col).fill = mismatch_fill
+                                mismatches += 1
+                                found_match = True
+                        else:
+                            # Check against comm columns for other companies
+                            comm_heights = [
+                                alden_pole_data.get('comm1_attach', ''),
+                                alden_pole_data.get('comm2_attach', ''),
+                                alden_pole_data.get('comm3_attach', '')
+                            ]
+                            comm_heights = [h for h in comm_heights if h and h.lower() != 'nan']
+                            
+                            if comm_heights:
+                                if any(from_alden_height_str.lower() == h.lower() for h in comm_heights):
+                                    from_alden_sheet.cell(row=row_idx, column=height_col).fill = match_fill
+                                    matches += 1
+                                    found_match = True
+                                    if len(poles_processed) <= 2:
+                                        logging.info(f"    Row {row_idx}: Height {from_alden_height_str} MATCHED in comm columns for company '{company}'")
+                                else:
+                                    from_alden_sheet.cell(row=row_idx, column=height_col).fill = mismatch_fill
+                                    mismatches += 1
+                                    found_match = True
+                                    if len(poles_processed) <= 2:
+                                        logging.info(f"    Row {row_idx}: Height {from_alden_height_str} MISMATCH for company '{company}' (comm heights: {comm_heights})")
+                        
+                        if found_match:
+                            total_comparisons += 1
+                
+                # MidSpan comparison - map to appropriate field based on CompanyName (case-insensitive)
+                # Skip if Status = 'Not in Field'
+                if midspan_col and company and not skip_height_comparison:
+                    from_alden_midspan = from_alden_sheet.cell(row=row_idx, column=midspan_col).value
+                    from_alden_midspan_str = str(from_alden_midspan).strip() if from_alden_midspan else ""
+                    
+                    if from_alden_midspan_str and from_alden_midspan_str.lower() != 'nan':
+                        # Compare based on company (case-insensitive)
+                        found_match = False
+                        
+                        if "metronet fiber llc" in company.lower():
+                            alden_midspan = alden_pole_data.get('metro_mid', '')
+                            if alden_midspan and from_alden_midspan_str.lower() == alden_midspan.lower():
+                                from_alden_sheet.cell(row=row_idx, column=midspan_col).fill = match_fill
+                                matches += 1
+                                found_match = True
+                            elif alden_midspan:
+                                from_alden_sheet.cell(row=row_idx, column=midspan_col).fill = mismatch_fill
+                                mismatches += 1
+                                found_match = True
+                        elif "xcel energy" in company.lower():
+                            alden_midspan = alden_pole_data.get('power_mid', '')
+                            if alden_midspan and from_alden_midspan_str.lower() == alden_midspan.lower():
+                                from_alden_sheet.cell(row=row_idx, column=midspan_col).fill = match_fill
+                                matches += 1
+                                found_match = True
+                            elif alden_midspan:
+                                from_alden_sheet.cell(row=row_idx, column=midspan_col).fill = mismatch_fill
+                                mismatches += 1
+                                found_match = True
+                        else:
+                            # Check against comm midspan columns for other companies
+                            comm_midspans = [
+                                alden_pole_data.get('comm1_mid', ''),
+                                alden_pole_data.get('comm2_mid', ''),
+                                alden_pole_data.get('comm3_mid', '')
+                            ]
+                            comm_midspans = [m for m in comm_midspans if m and m.lower() != 'nan']
+                            
+                            if comm_midspans:
+                                if any(from_alden_midspan_str.lower() == m.lower() for m in comm_midspans):
+                                    from_alden_sheet.cell(row=row_idx, column=midspan_col).fill = match_fill
+                                    matches += 1
+                                    found_match = True
+                                    if len(poles_processed) <= 2:
+                                        logging.info(f"    Row {row_idx}: MidSpan {from_alden_midspan_str} MATCHED in comm columns for company '{company}'")
+                                else:
+                                    from_alden_sheet.cell(row=row_idx, column=midspan_col).fill = mismatch_fill
+                                    mismatches += 1
+                                    found_match = True
+                                    if len(poles_processed) <= 2:
+                                        logging.info(f"    Row {row_idx}: MidSpan {from_alden_midspan_str} MISMATCH for company '{company}' (comm midspans: {comm_midspans})")
+                        
+                        if found_match:
+                            total_comparisons += 1
+            
+            logging.info(f"'From Alden' comparison complete: {total_comparisons} field comparisons ({matches} matches, {mismatches} mismatches), {len(poles_processed)} unique poles processed, {not_found} rows with pole not found, {skipped_not_in_field} rows skipped (Status='Not in Field')")
+            
+        except Exception as e:
+            logging.error(f"Error applying From Alden QC comparison: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+    
+    def _apply_from_alden_validation_rules(self, from_alden_sheet):
+        """
+        Apply validation rules to 'From Alden' sheet
+        Highlights cells in red if they violate business logic rules
+        
+        Rules:
+        1. If MakeReadyNotes contains 'MetroNet Riser' → BypassMakeReady must be 'Yes', else 'No'
+        2. If Status = 'Not in Field' → AttachmentType must be 'Other' AND _Height must be '0'0"'
+        3. If Status = 'Proposed' → CompanyName must be 'Metronet Fiber LLC' AND AttachmentType must be 'Communication Fiber-Optic'
+        4. If CompanyName != 'Metronet Fiber LLC' → Status can only be 'Not in Field' or 'EXISTING'
+        5. If CompanyName = 'Metronet Fiber LLC' → Weight and Diameter must not be empty
+        6. If MakeReadyNotes has text after colon → MakeReadyNeeded must be 'Yes', else 'No'
+        
+        Args:
+            from_alden_sheet: openpyxl worksheet for 'From Alden' sheet
+        """
+        try:
+            from openpyxl.styles import PatternFill
+            
+            # Define validation fills
+            validation_error_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")  # Red
+            validation_success_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")  # Green
+            
+            # Find columns
+            col_map = {}
+            header_row = None
+            
+            for row_num in [1, 2, 3]:
+                for col_idx in range(1, min(from_alden_sheet.max_column + 1, 100)):
+                    cell_value = from_alden_sheet.cell(row=row_num, column=col_idx).value
+                    if cell_value:
+                        header_text = str(cell_value).strip()
+                        col_map[header_text] = col_idx
+                        if header_text == 'DesignSketchReferenceNumber':
+                            header_row = row_num
+                
+                if header_row:
+                    break
+            
+            if not header_row:
+                logging.warning("Could not find header row in 'From Alden' sheet for validation")
+                return
+            
+            # Log which columns were found
+            required_cols = ['MakeReadyNotes', 'BypassMakeReady', 'MakeReadyNeeded', 'Status', 'AttachmentType', '_Height', 
+                           'CompanyName', 'Weight', 'Diameter']
+            found_cols = [col for col in required_cols if col in col_map]
+            logging.info(f"Found validation columns: {found_cols}")
+            
+            # Track validation violations
+            violations = {
+                'bypass_makeready': 0,
+                'makeready_needed': 0,
+                'not_in_field': 0,
+                'proposed': 0,
+                'non_metronet_status': 0,
+                'metronet_weight_diameter': 0
+            }
+            
+            data_start = header_row + 1
+            max_row = from_alden_sheet.max_row
+            
+            # Apply validation rules row by row
+            for row_idx in range(data_start, max_row + 1):
+                # Skip empty rows
+                if not from_alden_sheet.cell(row=row_idx, column=1).value:
+                    continue
+                
+                # Read all relevant columns for this row
+                row_data = {}
+                for col_name, col_idx in col_map.items():
+                    cell_value = from_alden_sheet.cell(row=row_idx, column=col_idx).value
+                    row_data[col_name] = str(cell_value).strip() if cell_value else ""
+                
+                # Rule 1: MakeReadyNotes contains 'MetroNet Riser' → BypassMakeReady must be 'Yes', else 'No' (case-insensitive)
+                if 'MakeReadyNotes' in col_map and 'BypassMakeReady' in col_map:
+                    mr_notes = row_data.get('MakeReadyNotes', '')
+                    bypass = row_data.get('BypassMakeReady', '')
+                    
+                    if 'metronet riser' in mr_notes.lower():
+                        # Should be 'Yes'
+                        if bypass.lower() == 'yes':
+                            # Highlight green for correct 'Yes'
+                            from_alden_sheet.cell(row=row_idx, column=col_map['BypassMakeReady']).fill = validation_success_fill
+                        else:
+                            # Highlight red for incorrect value
+                            from_alden_sheet.cell(row=row_idx, column=col_map['BypassMakeReady']).fill = validation_error_fill
+                            violations['bypass_makeready'] += 1
+                    else:
+                        # Should be 'No'
+                        if bypass.lower() == 'no':
+                            # Highlight green for correct 'No'
+                            from_alden_sheet.cell(row=row_idx, column=col_map['BypassMakeReady']).fill = validation_success_fill
+                        else:
+                            # Highlight red for incorrect value
+                            from_alden_sheet.cell(row=row_idx, column=col_map['BypassMakeReady']).fill = validation_error_fill
+                            violations['bypass_makeready'] += 1
+                
+                # Rule 2: Status = 'Not in Field' → AttachmentType must be 'Other' AND _Height must be '0'0"' (case-insensitive)
+                if 'Status' in col_map:
+                    status = row_data.get('Status', '')
+                    
+                    if status.lower() == 'not in field':
+                        if 'AttachmentType' in col_map:
+                            attachment_type = row_data.get('AttachmentType', '')
+                            if attachment_type.lower() == 'other':
+                                # Highlight green for correct 'Other'
+                                from_alden_sheet.cell(row=row_idx, column=col_map['AttachmentType']).fill = validation_success_fill
+                            else:
+                                # Highlight red for incorrect value
+                                from_alden_sheet.cell(row=row_idx, column=col_map['AttachmentType']).fill = validation_error_fill
+                                violations['not_in_field'] += 1
+                        
+                        if '_Height' in col_map:
+                            height = row_data.get('_Height', '')
+                            if height == "0'0\"":
+                                # Highlight green for correct height
+                                from_alden_sheet.cell(row=row_idx, column=col_map['_Height']).fill = validation_success_fill
+                            else:
+                                # Highlight red for incorrect value
+                                from_alden_sheet.cell(row=row_idx, column=col_map['_Height']).fill = validation_error_fill
+                                violations['not_in_field'] += 1
+                
+                # Rule 3: Status = 'Proposed' → CompanyName must be 'Metronet Fiber LLC' AND AttachmentType must be 'Communication Fiber-Optic' (case-insensitive)
+                if 'Status' in col_map:
+                    status = row_data.get('Status', '')
+                    
+                    if status.lower() == 'proposed':
+                        company_valid = None  # None means column doesn't exist or not checked yet
+                        attachment_type_valid = None
+                        
+                        if 'CompanyName' in col_map:
+                            company = row_data.get('CompanyName', '')
+                            if company.lower() == 'metronet fiber llc':
+                                # Highlight green for correct company
+                                from_alden_sheet.cell(row=row_idx, column=col_map['CompanyName']).fill = validation_success_fill
+                                company_valid = True
+                            else:
+                                # Highlight red for incorrect value
+                                from_alden_sheet.cell(row=row_idx, column=col_map['CompanyName']).fill = validation_error_fill
+                                company_valid = False
+                                violations['proposed'] += 1
+                        
+                        if 'AttachmentType' in col_map:
+                            attachment_type = row_data.get('AttachmentType', '')
+                            if attachment_type.lower() == 'communication fiber-optic':
+                                # Highlight green for correct attachment type
+                                from_alden_sheet.cell(row=row_idx, column=col_map['AttachmentType']).fill = validation_success_fill
+                                attachment_type_valid = True
+                            else:
+                                # Highlight red for incorrect value
+                                from_alden_sheet.cell(row=row_idx, column=col_map['AttachmentType']).fill = validation_error_fill
+                                attachment_type_valid = False
+                                violations['proposed'] += 1
+                        
+                        # Only highlight Status if both columns exist and were checked
+                        if company_valid is not None and attachment_type_valid is not None:
+                            if company_valid and attachment_type_valid:
+                                # Both conditions met, highlight Status green
+                                from_alden_sheet.cell(row=row_idx, column=col_map['Status']).fill = validation_success_fill
+                            else:
+                                # At least one condition failed, highlight Status red
+                                from_alden_sheet.cell(row=row_idx, column=col_map['Status']).fill = validation_error_fill
+                
+                # Rule 4: CompanyName != 'Metronet Fiber LLC' → Status can only be 'Not in Field' or 'EXISTING' (case-insensitive)
+                if 'CompanyName' in col_map and 'Status' in col_map:
+                    company = row_data.get('CompanyName', '')
+                    status = row_data.get('Status', '')
+                    
+                    if company.lower() != 'metronet fiber llc':
+                        if status.lower() in ['not in field', 'existing']:
+                            # Highlight green for correct status
+                            from_alden_sheet.cell(row=row_idx, column=col_map['Status']).fill = validation_success_fill
+                        else:
+                            # Highlight red for incorrect value
+                            from_alden_sheet.cell(row=row_idx, column=col_map['Status']).fill = validation_error_fill
+                            violations['non_metronet_status'] += 1
+                
+                # Rule 5: CompanyName = 'Metronet Fiber LLC' → Weight and Diameter must not be empty (case-insensitive)
+                if 'CompanyName' in col_map:
+                    company = row_data.get('CompanyName', '')
+                    
+                    if company.lower() == 'metronet fiber llc':
+                        if 'Weight' in col_map:
+                            weight = row_data.get('Weight', '')
+                            if weight and weight.lower() != 'nan':
+                                # Highlight green for valid weight
+                                from_alden_sheet.cell(row=row_idx, column=col_map['Weight']).fill = validation_success_fill
+                            else:
+                                # Highlight red for empty or invalid weight
+                                from_alden_sheet.cell(row=row_idx, column=col_map['Weight']).fill = validation_error_fill
+                                violations['metronet_weight_diameter'] += 1
+                        
+                        if 'Diameter' in col_map:
+                            diameter = row_data.get('Diameter', '')
+                            if diameter and diameter.lower() != 'nan':
+                                # Highlight green for valid diameter
+                                from_alden_sheet.cell(row=row_idx, column=col_map['Diameter']).fill = validation_success_fill
+                            else:
+                                # Highlight red for empty or invalid diameter
+                                from_alden_sheet.cell(row=row_idx, column=col_map['Diameter']).fill = validation_error_fill
+                                violations['metronet_weight_diameter'] += 1
+                
+                # Rule 6: MakeReadyNotes has text after colon → MakeReadyNeeded = 'Yes', else 'No' (case-insensitive)
+                if 'MakeReadyNotes' in col_map and 'MakeReadyNeeded' in col_map:
+                    mr_notes = row_data.get('MakeReadyNotes', '')
+                    mr_needed = row_data.get('MakeReadyNeeded', '')
+                    
+                    # Extract text after colon
+                    text_after_colon = ''
+                    if ':' in mr_notes:
+                        text_after_colon = mr_notes.split(':', 1)[1].strip()
+                    
+                    # Check if there's actual text after the colon
+                    has_text_after_colon = bool(text_after_colon)
+                    
+                    if has_text_after_colon:
+                        # Should be 'Yes'
+                        if mr_needed.lower() == 'yes':
+                            # Highlight green for correct 'Yes'
+                            from_alden_sheet.cell(row=row_idx, column=col_map['MakeReadyNeeded']).fill = validation_success_fill
+                        else:
+                            # Highlight red for incorrect value
+                            from_alden_sheet.cell(row=row_idx, column=col_map['MakeReadyNeeded']).fill = validation_error_fill
+                            violations['makeready_needed'] += 1
+                    else:
+                        # Should be 'No'
+                        if mr_needed.lower() == 'no':
+                            # Highlight green for correct 'No'
+                            from_alden_sheet.cell(row=row_idx, column=col_map['MakeReadyNeeded']).fill = validation_success_fill
+                        else:
+                            # Highlight red for incorrect value
+                            from_alden_sheet.cell(row=row_idx, column=col_map['MakeReadyNeeded']).fill = validation_error_fill
+                            violations['makeready_needed'] += 1
+            
+            # Log summary
+            total_violations = sum(violations.values())
+            if total_violations > 0:
+                logging.info(f"Validation complete: {total_violations} violations found")
+                logging.info(f"  - BypassMakeReady: {violations['bypass_makeready']}")
+                logging.info(f"  - MakeReadyNeeded: {violations['makeready_needed']}")
+                logging.info(f"  - Not in Field rules: {violations['not_in_field']}")
+                logging.info(f"  - Proposed rules: {violations['proposed']}")
+                logging.info(f"  - Non-Metronet Status: {violations['non_metronet_status']}")
+                logging.info(f"  - Metronet Weight/Diameter: {violations['metronet_weight_diameter']}")
+            else:
+                logging.info("Validation complete: No violations found")
+            
+        except Exception as e:
+            logging.error(f"Error applying validation rules: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+    
+    def _build_alden_sheet_lookup(self, alden_sheet):
+        """
+        Build a lookup dictionary from Alden sheet data
+        Returns: dict mapping pole_number -> {field_name: value}
+        """
+        try:
+            import re
+            
+            # Find header row and columns
+            pole_col = None
+            mr_notes_col = None
+            metro_attach_col = None
+            metro_mid_col = None
+            power_attach_col = None
+            power_mid_col = None
+            comm1_col = None
+            comm2_col = None
+            comm3_col = None
+            comm1_mid_col = None
+            comm2_mid_col = None
+            comm3_mid_col = None
+            header_row = None
+            
+            for row_num in [1, 2, 3]:
+                for col_idx in range(1, min(alden_sheet.max_column + 1, 100)):
+                    cell_value = alden_sheet.cell(row=row_num, column=col_idx).value
+                    if cell_value:
+                        header_text = re.sub(r"\s+", " ", str(cell_value).replace("\n", " ")).strip().lower()
+                        if 'pole' in header_text and col_idx == 1:
+                            pole_col = col_idx
+                            header_row = row_num
+                        if 'mr notes' in header_text:
+                            mr_notes_col = col_idx
+                        if 'metro attachment' in header_text or 'metro attach' in header_text:
+                            metro_attach_col = col_idx
+                        if 'metro mid' in header_text:
+                            metro_mid_col = col_idx
+                        if 'lowest power at pole' in header_text:
+                            power_attach_col = col_idx
+                        elif 'lowest power' in header_text and 'type' not in header_text and 'mid' not in header_text and power_attach_col is None:
+                            power_attach_col = col_idx
+                        if 'lowest power at mid' in header_text:
+                            power_mid_col = col_idx
+                        # Comm attachment columns
+                        if 'comm1' in header_text and 'mid' not in header_text:
+                            comm1_col = col_idx
+                        if 'comm2' in header_text and 'mid' not in header_text:
+                            comm2_col = col_idx
+                        if 'comm3' in header_text and 'mid' not in header_text:
+                            comm3_col = col_idx
+                        if 'comm1' in header_text and 'mid' in header_text:
+                            comm1_mid_col = col_idx
+                        if 'comm2' in header_text and 'mid' in header_text:
+                            comm2_mid_col = col_idx
+                        if 'comm3' in header_text and 'mid' in header_text:
+                            comm3_mid_col = col_idx
+                
+                if pole_col:
+                    break
+            
+            if not pole_col:
+                logging.warning("Could not find Pole column in Alden sheet for lookup")
+                return {}
+            
+            logging.info(f"Found Alden sheet columns: Pole={pole_col}, MR_Notes={mr_notes_col}, Metro_Attach={metro_attach_col}, Metro_Mid={metro_mid_col}, Power_Attach={power_attach_col}, Power_Mid={power_mid_col}, Comm1={comm1_col}, Comm2={comm2_col}, Comm3={comm3_col}, Comm1_Mid={comm1_mid_col}, Comm2_Mid={comm2_mid_col}, Comm3_Mid={comm3_mid_col}")
+            
+            # Read data from Alden sheet
+            alden_data = {}
+            data_start = header_row + 1 if header_row else 2
+            
+            for row_idx in range(data_start, alden_sheet.max_row + 1):
+                pole_value = alden_sheet.cell(row=row_idx, column=pole_col).value
+                if not pole_value:
+                    continue
+                
+                pole_str = str(pole_value).strip()
+                if not pole_str or pole_str == 'nan':
+                    continue
+                
+                pole_normalized = self._normalize_pole_number(pole_str)
+                
+                # Extract MR Notes (remove prefix before colon)
+                mr_notes = ""
+                if mr_notes_col:
+                    mr_notes_val = alden_sheet.cell(row=row_idx, column=mr_notes_col).value
+                    mr_notes = str(mr_notes_val).strip() if mr_notes_val else ""
+                    if ':' in mr_notes:
+                        mr_notes = mr_notes.split(':', 1)[1].strip()
+                
+                alden_data[pole_normalized] = {
+                    'mr_notes': mr_notes,
+                    'metro_attach': str(alden_sheet.cell(row=row_idx, column=metro_attach_col).value).strip() if metro_attach_col and alden_sheet.cell(row=row_idx, column=metro_attach_col).value else "",
+                    'metro_mid': str(alden_sheet.cell(row=row_idx, column=metro_mid_col).value).strip() if metro_mid_col and alden_sheet.cell(row=row_idx, column=metro_mid_col).value else "",
+                    'power_attach': str(alden_sheet.cell(row=row_idx, column=power_attach_col).value).strip() if power_attach_col and alden_sheet.cell(row=row_idx, column=power_attach_col).value else "",
+                    'power_mid': str(alden_sheet.cell(row=row_idx, column=power_mid_col).value).strip() if power_mid_col and alden_sheet.cell(row=row_idx, column=power_mid_col).value else "",
+                    'comm1_attach': str(alden_sheet.cell(row=row_idx, column=comm1_col).value).strip() if comm1_col and alden_sheet.cell(row=row_idx, column=comm1_col).value else "",
+                    'comm2_attach': str(alden_sheet.cell(row=row_idx, column=comm2_col).value).strip() if comm2_col and alden_sheet.cell(row=row_idx, column=comm2_col).value else "",
+                    'comm3_attach': str(alden_sheet.cell(row=row_idx, column=comm3_col).value).strip() if comm3_col and alden_sheet.cell(row=row_idx, column=comm3_col).value else "",
+                    'comm1_mid': str(alden_sheet.cell(row=row_idx, column=comm1_mid_col).value).strip() if comm1_mid_col and alden_sheet.cell(row=row_idx, column=comm1_mid_col).value else "",
+                    'comm2_mid': str(alden_sheet.cell(row=row_idx, column=comm2_mid_col).value).strip() if comm2_mid_col and alden_sheet.cell(row=row_idx, column=comm2_mid_col).value else "",
+                    'comm3_mid': str(alden_sheet.cell(row=row_idx, column=comm3_mid_col).value).strip() if comm3_mid_col and alden_sheet.cell(row=row_idx, column=comm3_mid_col).value else "",
+                }
+            
+            logging.info(f"Built Alden sheet lookup with {len(alden_data)} poles")
+            return alden_data
+            
+        except Exception as e:
+            logging.error(f"Error building Alden sheet lookup: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            return {}
+    
+    def _create_alden_sheet_reader(self, alden_sheet):
+        """
+        Create a data reader from Alden sheet that mimics the alden_qc_reader interface
+        
+        Args:
+            alden_sheet: openpyxl worksheet object for Alden sheet
+            
+        Returns:
+            dict: Dictionary with methods to get data from Alden sheet
+        """
+        try:
+            import re
+            
+            # Find headers and data
+            pole_col = None
+            mr_notes_col = None
+            metro_attach_col = None
+            metro_mid_col = None
+            power_attach_col = None
+            power_mid_col = None
+            power_type_col = None
+            comm1_col = None
+            comm2_col = None
+            comm3_col = None
+            comm1_mid_col = None
+            comm2_mid_col = None
+            comm3_mid_col = None
+            header_row = None
+            
+            # Find header row and columns
+            for row_num in [1, 2, 3]:
+                for col_idx in range(1, min(alden_sheet.max_column + 1, 100)):
+                    cell_value = alden_sheet.cell(row=row_num, column=col_idx).value
+                    if cell_value:
+                        header_text = re.sub(r"\s+", " ", str(cell_value).replace("\n", " ")).strip().lower()
+                        if 'pole' in header_text and col_idx == 1:
+                            pole_col = col_idx
+                            header_row = row_num
+                        if 'mr notes' in header_text or 'makereadynotes' in header_text:
+                            mr_notes_col = col_idx
+                        if 'metro attachment' in header_text or 'metro attach' in header_text:
+                            metro_attach_col = col_idx
+                        if 'metro mid' in header_text:
+                            metro_mid_col = col_idx
+                        if 'lowest power at pole' in header_text and power_attach_col is None:
+                            power_attach_col = col_idx
+                        elif 'lowest power' in header_text and 'type' not in header_text and power_attach_col is None:
+                            power_attach_col = col_idx
+                        if 'lowest power at mid' in header_text:
+                            power_mid_col = col_idx
+                        if 'lowest power type' in header_text:
+                            power_type_col = col_idx
+                        if 'comm1' in header_text and 'mid' not in header_text:
+                            comm1_col = col_idx
+                        if 'comm2' in header_text and 'mid' not in header_text:
+                            comm2_col = col_idx
+                        if 'comm3' in header_text and 'mid' not in header_text:
+                            comm3_col = col_idx
+                        if 'comm1' in header_text and 'mid' in header_text:
+                            comm1_mid_col = col_idx
+                        if 'comm2' in header_text and 'mid' in header_text:
+                            comm2_mid_col = col_idx
+                        if 'comm3' in header_text and 'mid' in header_text:
+                            comm3_mid_col = col_idx
+                
+                if pole_col:
+                    break
+            
+            if not pole_col:
+                logging.warning("Could not find Pole column in Alden sheet")
+                return None
+            
+            # Read all data into dictionary by pole number
+            data_by_pole = {}
+            data_start = header_row + 1 if header_row else 2
+            
+            for row_idx in range(data_start, alden_sheet.max_row + 1):
+                pole_value = alden_sheet.cell(row=row_idx, column=pole_col).value
+                if not pole_value:
+                    continue
+                
+                pole_str = str(pole_value).strip()
+                if not pole_str or pole_str == 'nan':
+                    continue
+                
+                pole_normalized = self._normalize_pole_number(pole_str)
+                
+                # Store all relevant data for this pole
+                data_by_pole[pole_normalized] = {
+                    'mr_notes': alden_sheet.cell(row=row_idx, column=mr_notes_col).value if mr_notes_col else "",
+                    'metro_attach': alden_sheet.cell(row=row_idx, column=metro_attach_col).value if metro_attach_col else "",
+                    'metro_mid': alden_sheet.cell(row=row_idx, column=metro_mid_col).value if metro_mid_col else "",
+                    'power_attach': alden_sheet.cell(row=row_idx, column=power_attach_col).value if power_attach_col else "",
+                    'power_mid': alden_sheet.cell(row=row_idx, column=power_mid_col).value if power_mid_col else "",
+                    'power_type': alden_sheet.cell(row=row_idx, column=power_type_col).value if power_type_col else "",
+                    'comm1': alden_sheet.cell(row=row_idx, column=comm1_col).value if comm1_col else "",
+                    'comm2': alden_sheet.cell(row=row_idx, column=comm2_col).value if comm2_col else "",
+                    'comm3': alden_sheet.cell(row=row_idx, column=comm3_col).value if comm3_col else "",
+                    'comm1_mid': alden_sheet.cell(row=row_idx, column=comm1_mid_col).value if comm1_mid_col else "",
+                    'comm2_mid': alden_sheet.cell(row=row_idx, column=comm2_mid_col).value if comm2_mid_col else "",
+                    'comm3_mid': alden_sheet.cell(row=row_idx, column=comm3_mid_col).value if comm3_mid_col else "",
+                }
+            
+            logging.info(f"Created Alden sheet reader with {len(data_by_pole)} poles")
+            
+            # Create reader object with same interface as alden_qc_reader
+            class AldenSheetReader:
+                def __init__(self, data, normalize_func):
+                    self.data = data
+                    self._normalize_pole_number = normalize_func
+                
+                def has_pole(self, pole_number):
+                    normalized = self._normalize_pole_number(pole_number)
+                    return normalized in self.data
+                
+                def get_mr_notes(self, pole_number):
+                    normalized = self._normalize_pole_number(pole_number)
+                    data = self.data.get(normalized, {})
+                    value = data.get('mr_notes', '')
+                    # Extract text after colon if exists
+                    value_str = str(value).strip() if value else ""
+                    if ':' in value_str:
+                        return value_str.split(':', 1)[1].strip()
+                    return value_str
+                
+                def get_metronet_attachment_height(self, pole_number):
+                    normalized = self._normalize_pole_number(pole_number)
+                    data = self.data.get(normalized, {})
+                    value = data.get('metro_attach', '')
+                    return str(value).strip() if value else ""
+                
+                def get_metronet_midspan_height(self, pole_number):
+                    normalized = self._normalize_pole_number(pole_number)
+                    data = self.data.get(normalized, {})
+                    value = data.get('metro_mid', '')
+                    return str(value).strip() if value else ""
+                
+                def get_power_attachment_height(self, pole_number):
+                    normalized = self._normalize_pole_number(pole_number)
+                    data = self.data.get(normalized, {})
+                    value = data.get('power_attach', '')
+                    return str(value).strip() if value else ""
+                
+                def get_power_midspan_height(self, pole_number):
+                    normalized = self._normalize_pole_number(pole_number)
+                    data = self.data.get(normalized, {})
+                    value = data.get('power_mid', '')
+                    return str(value).strip() if value else ""
+                
+                def get_power_attachment_type(self, pole_number):
+                    normalized = self._normalize_pole_number(pole_number)
+                    data = self.data.get(normalized, {})
+                    value = data.get('power_type', '')
+                    return str(value).strip() if value else ""
+                
+                def get_comm_attachment_height(self, pole_number, comm_number):
+                    normalized = self._normalize_pole_number(pole_number)
+                    data = self.data.get(normalized, {})
+                    value = data.get(f'comm{comm_number}', '')
+                    return str(value).strip() if value else ""
+                
+                def get_comm_midspan_height(self, pole_number, comm_number):
+                    normalized = self._normalize_pole_number(pole_number)
+                    data = self.data.get(normalized, {})
+                    value = data.get(f'comm{comm_number}_mid', '')
+                    return str(value).strip() if value else ""
+            
+            return AldenSheetReader(data_by_pole, self._normalize_pole_number)
+            
+        except Exception as e:
+            logging.error(f"Error creating Alden sheet reader: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            return None
+    
+    def _apply_sheet_comparison(self, sheet, data_reader, sheet_name):
+        """
+        Apply comparison highlighting to a sheet using a data reader (reuses Alden QC comparison logic)
+        
+        Args:
+            sheet: openpyxl worksheet to highlight
+            data_reader: Data reader object with same interface as alden_qc_reader
+            sheet_name: Name of the sheet for logging
+        """
+        try:
+            import re
+            from openpyxl.styles import PatternFill
+            
+            logging.info(f"Applying comparison to '{sheet_name}' sheet")
+            
+            # Find header row and columns (same as _apply_alden_qc_comparison)
+            pole_col = None
+            mr_notes_col = None
+            metro_attach_col = None
+            metro_mid_col = None
+            power_attach_col = None
+            power_mid_col = None
+            power_type_col = None
+            street_light_col = None
+            comm1_col = None
+            comm2_col = None
+            comm3_col = None
+            comm1_mid_col = None
+            comm2_mid_col = None
+            comm3_mid_col = None
+            detected_header_row = None
+            
+            for row_num in [1, 2, 3]:
+                headers_found = []
+                for col_idx in range(1, min(sheet.max_column + 1, 100)):
+                    cell_value = sheet.cell(row=row_num, column=col_idx).value
+                    if cell_value:
+                        header_text = re.sub(r"\s+", " ", str(cell_value).replace("\n", " ")).strip().lower()
+                        headers_found.append((col_idx, header_text))
+                        # Match pole column - handle both "Pole" and "DesignSketchReferenceNumber"
+                        if col_idx == 1 and ('pole' in header_text or 'designsketchreferencenumber' in header_text):
+                            pole_col = col_idx
+                        if 'mr notes' in header_text or 'makereadynotes' in header_text:
+                            mr_notes_col = col_idx
+                        if 'metro attachment' in header_text or 'metro attach' in header_text:
+                            metro_attach_col = col_idx
+                        if 'metro mid' in header_text:
+                            metro_mid_col = col_idx
+                        if 'lowest power at pole' in header_text and power_attach_col is None:
+                            power_attach_col = col_idx
+                        elif 'lowest power' in header_text and 'type' not in header_text and power_attach_col is None:
+                            power_attach_col = col_idx
+                        if 'lowest power at mid' in header_text:
+                            power_mid_col = col_idx
+                        if 'lowest power type' in header_text:
+                            power_type_col = col_idx
+                        if 'street light height' in header_text:
+                            street_light_col = col_idx
+                        if 'comm1' in header_text and 'mid' not in header_text:
+                            comm1_col = col_idx
+                        if 'comm2' in header_text and 'mid' not in header_text:
+                            comm2_col = col_idx
+                        if 'comm3' in header_text and 'mid' not in header_text:
+                            comm3_col = col_idx
+                        if 'comm1' in header_text and 'mid' in header_text:
+                            comm1_mid_col = col_idx
+                        if 'comm2' in header_text and 'mid' in header_text:
+                            comm2_mid_col = col_idx
+                        if 'comm3' in header_text and 'mid' in header_text:
+                            comm3_mid_col = col_idx
+                if pole_col and mr_notes_col:
+                    detected_header_row = row_num
+                    logging.info(f"Found columns in '{sheet_name}' at row {detected_header_row}: Pole={pole_col}, MR_Notes={mr_notes_col}")
+                    if metro_attach_col:
+                        logging.info(f"  Metro columns: attach={metro_attach_col}, mid={metro_mid_col}")
+                    if power_attach_col:
+                        logging.info(f"  Power columns: attach={power_attach_col}, mid={power_mid_col}, type={power_type_col}")
+                    if comm1_col:
+                        logging.info(f"  Comm columns: comm1={comm1_col}, comm2={comm2_col}, comm3={comm3_col}")
+                    break
+            
+            if not pole_col:
+                logging.warning(f"Could not find Pole column in '{sheet_name}' sheet (searched rows 1-3, column 1)")
+                return
+            
+            if not mr_notes_col:
+                logging.warning(f"Could not find MR Notes column in '{sheet_name}' sheet")
+                return
+            
+            # Find data range
+            data_start = detected_header_row + 1 if detected_header_row else 2
+            max_row = sheet.max_row
+            
+            # Define fill colors
+            match_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+            mismatch_fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+            not_found_fill = PatternFill(start_color="B3D9FF", end_color="B3D9FF", fill_type="solid")
+            
+            matches = 0
+            mismatches = 0
+            not_found = 0
+            
+            logging.info(f"Starting comparison for '{sheet_name}' - data rows {data_start} to {max_row}")
+            
+            # Compare each data row
+            for row_idx in range(data_start, max_row + 1):
+                pole_value = sheet.cell(row=row_idx, column=pole_col).value
+                if not pole_value:
+                    continue
+                
+                pole_str = str(pole_value).strip()
+                
+                # Log first few rows for debugging
+                if row_idx <= data_start + 2:
+                    logging.info(f"  Row {row_idx}: Pole={pole_str}")
+                
+                # Check if pole exists in data reader
+                if not data_reader.has_pole(pole_str):
+                    not_found += 1
+                    sheet.cell(row=row_idx, column=pole_col).fill = not_found_fill
+                    if row_idx <= data_start + 2:
+                        logging.info(f"    -> Pole {pole_str} NOT found in reference data (blue)")
+                    continue
+                
+                if row_idx <= data_start + 2:
+                    logging.info(f"    -> Pole {pole_str} found, comparing...")
+                
+                # Compare MR Notes
+                reader_mr_notes = data_reader.get_mr_notes(pole_str)
+                sheet_mr_notes_value = sheet.cell(row=row_idx, column=mr_notes_col).value
+                sheet_mr_notes = str(sheet_mr_notes_value).strip() if sheet_mr_notes_value else ""
+                
+                # Extract text after colon from sheet value
+                if ':' in sheet_mr_notes:
+                    sheet_mr_notes = sheet_mr_notes.split(':', 1)[1].strip()
+                
+                if sheet_mr_notes == reader_mr_notes:
+                    sheet.cell(row=row_idx, column=mr_notes_col).fill = match_fill
+                    matches += 1
+                else:
+                    sheet.cell(row=row_idx, column=mr_notes_col).fill = mismatch_fill
+                    mismatches += 1
+                
+                # Compare other fields using existing helper methods
+                if metro_attach_col:
+                    self._compare_metronet_attachment_height(
+                        sheet, row_idx, pole_str, metro_attach_col, match_fill, mismatch_fill, data_reader)
+                
+                if metro_mid_col:
+                    self._compare_metronet_midspan_height(
+                        sheet, row_idx, pole_str, metro_mid_col, match_fill, mismatch_fill, data_reader)
+                
+                if power_attach_col:
+                    self._compare_power_attachment_height(
+                        sheet, row_idx, pole_str, power_attach_col, match_fill, mismatch_fill, street_light_col, data_reader)
+                
+                if power_mid_col:
+                    self._compare_power_midspan_height(
+                        sheet, row_idx, pole_str, power_mid_col, match_fill, mismatch_fill, data_reader)
+                
+                if power_type_col:
+                    self._compare_power_type(
+                        sheet, row_idx, pole_str, power_type_col, match_fill, mismatch_fill, data_reader)
+                
+                if comm1_col:
+                    self._compare_comm_attachment_height(
+                        sheet, row_idx, pole_str, comm1_col, 1, match_fill, mismatch_fill, data_reader)
+                
+                if comm2_col:
+                    self._compare_comm_attachment_height(
+                        sheet, row_idx, pole_str, comm2_col, 2, match_fill, mismatch_fill, data_reader)
+                
+                if comm3_col:
+                    self._compare_comm_attachment_height(
+                        sheet, row_idx, pole_str, comm3_col, 3, match_fill, mismatch_fill, data_reader)
+                
+                if comm1_mid_col:
+                    self._compare_comm_midspan_height(
+                        sheet, row_idx, pole_str, comm1_mid_col, 1, match_fill, mismatch_fill, data_reader)
+                
+                if comm2_mid_col:
+                    self._compare_comm_midspan_height(
+                        sheet, row_idx, pole_str, comm2_mid_col, 2, match_fill, mismatch_fill, data_reader)
+                
+                if comm3_mid_col:
+                    self._compare_comm_midspan_height(
+                        sheet, row_idx, pole_str, comm3_mid_col, 3, match_fill, mismatch_fill, data_reader)
+            
+            logging.info(f"'{sheet_name}' comparison complete: {matches} matches, {mismatches} mismatches, {not_found} poles not found")
+            
+        except Exception as e:
+            logging.error(f"Error applying comparison to '{sheet_name}' sheet: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
 
     def _apply_span_length_tolerance(self, excel_span, qc_span, tolerance):
         """

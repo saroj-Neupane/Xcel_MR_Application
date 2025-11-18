@@ -19,6 +19,7 @@ class AldenQCReader:
         self.power_heights = {}  # Dict mapping normalized pole_number to dict with 'attachment_height' and 'midspan_height'
         self.comm_heights = {}  # Dict mapping normalized pole_number to list of dicts with 'comm_number', 'attachment_height' and 'midspan_height'
         self._active = False
+        self._raw_dataframe = None  # Store the raw DataFrame from Alden file
         
         if alden_qc_file_path:
             self.load_alden_qc_file(alden_qc_file_path)
@@ -111,6 +112,9 @@ class AldenQCReader:
             # Read the specific sheet with header in row 3
             df = pd.read_excel(alden_qc_file_path, sheet_name='Poles_Joint Use Attachment', header=2)
             logging.info(f"Read {len(df)} rows from Alden QC file")
+            
+            # Store the raw DataFrame for later use
+            self._raw_dataframe = df
             
             # Clear existing data
             self.qc_data.clear()
@@ -431,4 +435,13 @@ class AldenQCReader:
         """
         normalized_pole = self._normalize_pole_number(pole_number)
         return normalized_pole in self.comm_heights and len(self.comm_heights[normalized_pole]) > 0
+    
+    def get_raw_dataframe(self):
+        """
+        Get the raw DataFrame from the Alden file
+        
+        Returns:
+            pd.DataFrame: Raw DataFrame from Alden file, or None if not loaded
+        """
+        return self._raw_dataframe
 
