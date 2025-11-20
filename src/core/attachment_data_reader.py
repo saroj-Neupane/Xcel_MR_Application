@@ -26,7 +26,7 @@ class AttachmentDataReader:
             xls = pd.ExcelFile(self.file_path)
             scid_sheets = [sheet for sheet in xls.sheet_names if sheet.startswith("SCID ")]
             
-            logging.info(f"AttachmentDataReader: Discovered {len(scid_sheets)} SCID sheet(s) in {self.file_path}")
+            logging.info(f"Found {len(scid_sheets)} SCID sheets")
             
             for sheet_name in scid_sheets:
                 scid = sheet_name[5:].strip()
@@ -34,31 +34,31 @@ class AttachmentDataReader:
                 scid = Utils.normalize_scid(scid, ignore_keywords)
                 
                 if self.valid_scids is not None and scid not in self.valid_scids:
-                    logging.debug(f"AttachmentDataReader: Skipping sheet '{sheet_name}' because SCID '{scid}' is not in the valid set")
+                    logging.debug(f"Skipping SCID '{scid}' - not in valid set")
                     continue
                 
                 try:
                     df = pd.read_excel(self.file_path, sheet_name=sheet_name, header=1)
                     df = df.fillna("")
                     
-                    logging.info(f"AttachmentDataReader: Loaded {len(df)} record(s) for SCID '{scid}' from sheet '{sheet_name}'")
+                    logging.debug(f"Loaded {len(df)} records for SCID '{scid}'")
                     
                     df.columns = df.columns.str.strip().str.lower()
                     required_cols = ['company', 'measured', 'height_in_inches']
                     missing_cols = [col for col in required_cols if col not in df.columns]
                     if missing_cols:
-                        logging.warning(f"AttachmentDataReader: Sheet '{sheet_name}' missing columns: {missing_cols}. Available: {list(df.columns)}")
+                        logging.warning(f"Sheet '{sheet_name}' missing columns: {missing_cols}")
                         continue
                     
                     self.attachment_data[scid] = df
                 except Exception as e:
-                    logging.error(f"AttachmentDataReader: Error reading sheet '{sheet_name}': {e}")
+                    logging.error(f"Error reading sheet '{sheet_name}': {e}")
             
-            logging.info(f"AttachmentDataReader: Total valid SCIDs loaded: {len(self.attachment_data)}")
+            logging.info(f"Loaded {len(self.attachment_data)} valid SCIDs")
             if not self.attachment_data:
-                logging.error("AttachmentDataReader: No valid SCID data loaded from the attachment file!")
+                logging.error("No valid SCID data found in attachment file")
         except Exception as e:
-            logging.error(f"AttachmentDataReader: Failed to load attachment data from {self.file_path}: {e}")
+            logging.error(f"Failed to load attachment data: {e}", exc_info=True)
     
     def get_scid_data(self, scid):
         """Get attachment data for a specific SCID"""
@@ -191,8 +191,6 @@ class AttachmentDataReader:
             
             # Find rows that match power equipment keywords (case-insensitive)
             all_equipment = []  # Collect all matching equipment
-            # Normalize keywords to lowercase for consistent matching
-            normalized_keywords = [kw.strip().lower() for kw in power_equipment_keywords if isinstance(kw, str) and kw.strip()]
             
             for _, row in power_company_rows.iterrows():
                 measured = str(row.get('measured', '')).lower().strip()
@@ -241,15 +239,14 @@ class AttachmentDataReader:
                                             'height_decimal': height_inches / 12,
                                             'measured': row.get('measured', '')
                                         })
-                                        logging.debug(f"Added power equipment {display_name} at height {height_formatted} for SCID {scid}")
                                     else:
-                                        logging.warning(f"Failed to format height for equipment {display_name} in SCID {scid}: height_inches={height_inches}")
+                                        logging.debug(f"Could not format height for {display_name}")
                                 else:
-                                    logging.debug(f"Invalid height value for equipment {display_name} in SCID {scid}: {height_value}")
+                                    logging.debug(f"Invalid height for {display_name}")
                             except Exception as e:
-                                logging.warning(f"Error processing height for equipment {display_name} in SCID {scid}: {e}")
+                                logging.warning(f"Error processing {display_name} height: {e}")
                         else:
-                            logging.debug(f"No height data found for equipment {display_name} in SCID {scid}")
+                            logging.debug(f"No height data for {display_name}")
                         # Remove break to allow multiple keywords to match in the same row
             
             if all_equipment:
@@ -392,9 +389,8 @@ class AttachmentDataReader:
                         (df['measured'].astype(str).apply(matches_comm_keyword))
                     ]
                 
-                logging.debug(f"Processing provider '{provider}' for SCID {scid}. Found {len(provider_rows)} matching rows")
                 if not provider_rows.empty:
-                    logging.debug(f"Provider rows data for '{provider}': {provider_rows[['company', 'measured', 'height_in_inches']].to_dict('records')}")
+                    logging.debug(f"Found {len(provider_rows)} {provider} attachments for SCID {scid}")
                     # Clean and convert height data with better error handling
                     def clean_height_value(height_val):
                         """Clean height value and convert to numeric"""
@@ -415,7 +411,7 @@ class AttachmentDataReader:
                     valid_rows = provider_rows.dropna(subset=['height_numeric'])
                     invalid_count = len(provider_rows) - len(valid_rows)
                     if invalid_count > 0:
-                        logging.warning(f"Dropped {invalid_count} rows with invalid height data for provider {provider}, SCID {scid}")
+                        logging.debug(f"Skipped {invalid_count} invalid heights for {provider}")
                     
                     if not valid_rows.empty:
                         valid_rows = valid_rows.sort_values(by='height_numeric', ascending=False)
@@ -449,18 +445,11 @@ class AttachmentDataReader:
                                 'company': valid_rows.iloc[0]['company'],
                                 'measured': valid_rows.iloc[0]['measured']
                             }
-                            logging.debug(f"Created attachment for {provider}, SCID {scid}: {combined_heights}")
+                            logging.debug(f"Added {provider}: {combined_heights}")
                         else:
-                            logging.warning(f"No valid height data found for provider {provider}, SCID {scid}")
+                            logging.debug(f"No valid heights for {provider}")
                     else:
-                        logging.warning(f"No valid rows found for provider {provider}, SCID {scid} after height validation")
-                else:
-                    logging.debug(f"No matching rows found for provider {provider}, SCID {scid}")
-                    # Debug: Show what data is available
-                    if not df.empty:
-                        logging.debug(f"Available data in sheet for SCID {scid}: {df[['company', 'measured', 'height_in_inches']].to_dict('records')}")
-                    else:
-                        logging.debug(f"No data found in sheet for SCID {scid}")
+                        logging.debug(f"No valid data for {provider}")
             return attachments
         except Exception as e:
             logging.error(f"Error processing telecom attachments for SCID {scid}: {e}")

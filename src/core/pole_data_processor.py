@@ -124,8 +124,26 @@ class PoleDataProcessor:
                     # Extract SCIDs from the columns with row information
                     template_connections = []
                     for idx, row in df.iterrows():
-                        pole_scid = str(row[pole_col]).strip() if pd.notna(row[pole_col]) else ""
-                        to_pole_scid = str(row[to_pole_col]).strip() if pd.notna(row[to_pole_col]) else ""
+                        # Handle Excel numeric values (e.g., 62.0 -> "62")
+                        pole_val = row[pole_col]
+                        if pd.notna(pole_val):
+                            # If it's a numeric type (float/int), convert to int then string to remove decimals
+                            if isinstance(pole_val, (int, float)):
+                                pole_scid = str(int(pole_val))
+                            else:
+                                pole_scid = str(pole_val).strip()
+                        else:
+                            pole_scid = ""
+                        
+                        to_pole_val = row[to_pole_col]
+                        if pd.notna(to_pole_val):
+                            # If it's a numeric type (float/int), convert to int then string to remove decimals
+                            if isinstance(to_pole_val, (int, float)):
+                                to_pole_scid = str(int(to_pole_val))
+                            else:
+                                to_pole_scid = str(to_pole_val).strip()
+                        else:
+                            to_pole_scid = ""
                         
                         # Include rows where Pole exists, even if To Pole is N/A or empty
                         if pole_scid and pole_scid != "nan":
@@ -665,6 +683,16 @@ class PoleDataProcessor:
         """Process connections using only template SCIDs and PDF data"""
         logging.info("Processing template-only connections with PDF data")
         
+        # Log PDF reader status
+        if self.pdf_reader:
+            logging.info(f"PDF reader is available for template-only processing")
+            if hasattr(self.pdf_reader, 'existing_reports_folder'):
+                logging.info(f"PDF reader existing folder: {self.pdf_reader.existing_reports_folder}")
+            if hasattr(self.pdf_reader, 'proposed_reports_folder'):
+                logging.info(f"PDF reader proposed folder: {self.pdf_reader.proposed_reports_folder}")
+        else:
+            logging.warning("PDF reader is NOT available for template-only processing - PDF data will not be extracted")
+        
         result_data = []
         
         # Check for multi-sheet template first
@@ -682,6 +710,11 @@ class PoleDataProcessor:
         if not template_scids_to_process:
             logging.warning("No template SCIDs available for template-only processing")
             return result_data
+        
+        logging.info(f"Template-only processing: Found {len(template_scids_to_process)} template connections to process")
+        # Log first few pole SCIDs for debugging
+        sample_poles = [scid[0] for scid in template_scids_to_process[:5]]
+        logging.info(f"Template-only processing: Sample pole SCIDs: {sample_poles}")
         
         # Create empty mappings for template-only processing
         mappings = []
@@ -710,14 +743,24 @@ class PoleDataProcessor:
             if self.pdf_reader:
                 try:
                     pole_number = self._extract_pole_number_from_scid(pole_scid)
+                    logging.info(f"Template-only: Extracting PDF data for pole SCID '{pole_scid}' -> pole number {pole_number}")
                     if pole_number:
                         pdf_data = self.pdf_reader.extract_pole_data(pole_number)
-                        row_data['Structure Type'] = Utils.clean_structure_type(pdf_data.get('structure_type', ''))
-                        row_data['Existing Load'] = pdf_data.get('existing_load', '')
-                        row_data['Proposed Load'] = pdf_data.get('proposed_load', '')
-                        logging.debug(f"Added PDF data for pole {pole_scid}: {pdf_data}")
+                        # Convert None values to empty strings for cleaner output
+                        structure_type = pdf_data.get('structure_type') or ''
+                        existing_load = pdf_data.get('existing_load') or ''
+                        proposed_load = pdf_data.get('proposed_load') or ''
+                        
+                        row_data['Structure Type'] = Utils.clean_structure_type(structure_type)
+                        row_data['Existing Load'] = existing_load if existing_load else ''
+                        row_data['Proposed Load'] = proposed_load if proposed_load else ''
+                        logging.info(f"Template-only: Added PDF data for pole {pole_scid} (number {pole_number}): Structure Type='{row_data['Structure Type']}', Existing Load='{row_data['Existing Load']}', Proposed Load='{row_data['Proposed Load']}'")
+                    else:
+                        logging.warning(f"Template-only: Could not extract pole number from SCID '{pole_scid}' for PDF extraction")
                 except Exception as e:
-                    logging.error(f"Error extracting PDF data for pole {pole_scid}: {e}")
+                    logging.error(f"Error extracting PDF data for pole {pole_scid}: {e}", exc_info=True)
+            else:
+                logging.warning(f"Template-only: PDF reader not available for pole {pole_scid}")
             
             # Add attachment data if available
             if self.attachment_reader:
@@ -1131,20 +1174,35 @@ class PoleDataProcessor:
         """Extract pole number from SCID for PDF file matching
         
         Args:
-            scid: The SCID string (e.g., "001", "123", "001A")
+            scid: The SCID string (e.g., "001", "123", "001A", "62.0")
             
         Returns:
             Integer pole number or None if extraction fails
         """
         try:
-            # Remove any non-numeric characters and get the numeric part
             import re
-            numeric_part = re.sub(r'[^0-9]', '', str(scid))
+            scid_str = str(scid).strip()
+            
+            # Handle decimal numbers (e.g., "62.0" -> 62)
+            # First try to extract integer part before decimal point
+            decimal_match = re.match(r'^(\d+)\.', scid_str)
+            if decimal_match:
+                return int(decimal_match.group(1))
+            
+            # Handle pure numeric strings (e.g., "001", "123")
+            numeric_match = re.match(r'^(\d+)', scid_str)
+            if numeric_match:
+                return int(numeric_match.group(1))
+            
+            # Fallback: remove all non-numeric characters and get the numeric part
+            # This handles cases like "001A" -> 1
+            numeric_part = re.sub(r'[^0-9]', '', scid_str)
             if numeric_part:
                 return int(numeric_part)
+            
             return None
-        except (ValueError, TypeError):
-            logging.debug(f"Could not extract pole number from SCID: {scid}")
+        except (ValueError, TypeError) as e:
+            logging.debug(f"Could not extract pole number from SCID: {scid} - {e}")
             return None
     
     def _is_telecom_company(self, company_name):
@@ -1264,27 +1322,22 @@ class PoleDataProcessor:
             # Add PDF report data (Structure Type, Existing Load, Proposed Load)
             if self.pdf_reader:
                 try:
-                    # Extract pole number from SCID (e.g., "001" -> 1)
                     pole_number = self._extract_pole_number_from_scid(pole_scid)
-                    logging.debug(f"PoleDataProcessor: Extracting PDF data for SCID {pole_scid} -> pole number {pole_number}")
                     if pole_number:
                         pdf_data = self.pdf_reader.extract_pole_data(pole_number)
                         result['Structure Type'] = Utils.clean_structure_type(pdf_data.get('structure_type', ''))
                         result['Existing Load'] = pdf_data.get('existing_load', '')
                         result['Proposed Load'] = pdf_data.get('proposed_load', '')
-                        logging.debug(f"PoleDataProcessor: Added PDF data for pole {pole_scid} (number {pole_number}): {pdf_data}")
                     else:
                         result['Structure Type'] = ''
                         result['Existing Load'] = ''
                         result['Proposed Load'] = ''
-                        logging.debug(f"PoleDataProcessor: Could not extract pole number from SCID {pole_scid}")
                 except Exception as e:
-                    logging.error(f"PoleDataProcessor: Error extracting PDF data for pole {pole_scid}: {e}")
+                    logging.error(f"Error extracting PDF data for {pole_scid}: {e}")
                     result['Structure Type'] = ''
                     result['Existing Load'] = ''
                     result['Proposed Load'] = ''
             else:
-                logging.debug(f"PoleDataProcessor: No PDF reader available for pole {pole_scid}")
                 result['Structure Type'] = ''
                 result['Existing Load'] = ''
                 result['Proposed Load'] = ''
@@ -2483,7 +2536,11 @@ class PoleDataProcessor:
 
             # Create data cache for QC sheet population
             # Normalize pole numbers when storing to ensure consistent lookups
-            self._processed_data_cache = {}
+            # Clear previous cache to prevent stale data
+            if not hasattr(self, '_processed_data_cache'):
+                self._processed_data_cache = {}
+            else:
+                self._processed_data_cache.clear()
             normalization_log = []  # Track first few normalizations for debugging
             for idx, row in enumerate(sorted_data):
                 pole = row.get('Pole', '').strip()

@@ -12,15 +12,16 @@ class ConfigManager:
         self.config_file = self.base_dir / "xcel_config.json"
     
     def get_default_config(self):
-        """Get Xcel configuration - hardcoded Xcel.json values"""
+        """Get Xcel configuration - hardcoded Xcel defaults"""
         return {
             "power_company": "Xcel",
-            "proposed_company": "",
+            "proposed_company": "Proposed MetroNet",
             "telecom_providers": [
                 "Proposed MetroNet",
                 "CATV",
                 "Telephone Company",
-                "Fiber"
+                "Fiber",
+                "CenturyLink"
             ],
             "power_keywords": [
                 "Primary",
@@ -28,36 +29,39 @@ class ConfigManager:
                 "Neutral",
                 "Transformer",
                 "Secondary Drip Loop",
-                "Riser"
+                "Riser",
+                "CAP"
             ],
             "power_equipment_keywords": [
-                "Transformer",
                 "Riser",
-                "Capacitor"
+                "Capacitor",
+                "transformer bottom_of_equipment",
+                "CAP"
             ],
             "comm_keywords": [
-                "catv com",
-                "telco com",
-                "fiber optic com",
-                "insulator",
-                "power guy",
-                "catv",
-                "telco",
+                "Guy",
+                "Power Guy",
+                "insulator*",
                 "fiber",
-                "communication",
-                "comm"
+                "telco",
+                "catv"
             ],
             "street_light_keywords": [
-                "street light",
-                "street",
-                "streetlight",
-                "light arm"
+                "street"
             ],
             "ignore_scid_keywords": [
                 "AT&T",
                 "Foreign Pole",
                 "Unknown",
-                "Xcel"
+                "Xcel",
+                "PCO",
+                "LUMEN",
+                "US WEST",
+                "OTHER",
+                "NWBT",
+                "CENTURY LINK",
+                "CENTURYLINK",
+                "Transmission"
             ],
             "output_settings": {
                 "header_row": 1,
@@ -69,91 +73,32 @@ class ConfigManager:
                 "output_decimal": True
             },
             "column_mappings": [
-                [
-                    "Pole",
-                    "Number",
-                    "Pole No. (on Map)"
-                ],
-                [
-                    "Pole",
-                    "Tag",
-                    "Xcel Energy GIS Pole ID"
-                ],
-                [
-                    "Pole",
-                    "Latitude",
-                    "Latitude\n\n"
-                ],
-                [
-                    "Pole",
-                    "Longitude",
-                    "Longitude\n\n"
-                ],
-                [
-                    "Pole",
-                    "Height & Class",
-                    "Pole Ht/ Class"
-                ],
-                [
-                    "Power",
-                    "Lowest Height",
-                    "Lowest Power at Pole"
-                ],
-                [
-                    "Power",
-                    "Lowest Height",
-                    "Lowest Power Cable at Mid-span"
-                ],
-                [
-                    "Power",
-                    "Lowest Type",
-                    "Lowest Power Type"
-                ],
-                [
-                    "Street Light",
-                    "Lowest Height",
-                    "Street Light Bracket / Drip Loop (Lowest)"
-                ],
-                [
-                    "comm1",
-                    "Midspan Ht",
-                    "Highest Existing Communic. At Pole (1)"
-                ],
-                [
-                    "comm2",
-                    "Attachment Ht",
-                    "Existing Communic. At Pole (2)"
-                ],
-                [
-                    "comm3",
-                    "Attachment Ht",
-                    "Existing Communic. At Pole (3)"
-                ],
-                [
-                    "Pole",
-                    "Number of Existing Risers",
-                    "# of Existing Risers"
-                ],
-                [
-                    "Proposed MetroNet",
-                    "Attachment Ht",
-                    "Proposed Attachment Height for New Cable"
-                ],
-                [
-                    "Proposed MetroNet",
-                    "Midspan Ht",
-                    "Proposed Mid-span Cable Height (Must meet Sht J-6 min. and local ord.)"
-                ],
-                [
-                    "Pole",
-                    "MR Notes",
-                    "Proposed Modifications / Make-Ready Necessary to Allow for Attachment"
-                ],
-                [
-                    "New Guy",
-                    "Required",
-                    "New Guy Required"
-                ]
+                ["Pole", "Number", "Pole"],
+                ["Pole", "To Pole", "To Pole"],
+                ["Pole", "Tag", "Pole Tag"],
+                ["Pole", "Latitude", "Latitude"],
+                ["Pole", "Longitude", "Longitude"],
+                ["Pole", "Height & Class", "Pole Ht/ Class"],
+                ["Power", "Lowest Height", "Lowest Power at Pole"],
+                ["Power", "Lowest Midspan", "Lowest Power at Mid"],
+                ["Power", "Lowest Type", "Lowest Power Type"],
+                ["Street Light", "Lowest Height", "Street Light"],
+                ["comm1", "Attachment Ht", "comm1"],
+                ["comm2", "Attachment Ht", "comm2"],
+                ["comm3", "Attachment Ht", "comm3"],
+                ["Pole", "Number of Existing Risers", "# of Existing Risers"],
+                ["Proposed MetroNet", "Attachment Ht", "Metro Attachment"],
+                ["Proposed MetroNet", "Midspan Ht", "Metro Mid"],
+                ["Span", "Length", "Span Length"],
+                ["Pole", "MR Notes", "MR Notes"],
+                ["Power Equipment", "Equipment List", "Power Equipments"],
+                ["Pole", "Existing Structure Type", "Structure Type"],
+                ["Pole", "Existing Loading", "Existing Load"],
+                ["Pole", "Proposed Loading", "Proposed Load"],
+                ["New Guy", "Required", "Guy Needed"],
+                ["comm1", "Midspan Ht", "comm1 mid"],
+                ["comm2", "Midspan Ht", "comm2 mid"],
+                ["comm3", "Midspan Ht", "comm3 mid"]
             ]
         }
     
@@ -183,5 +128,5 @@ class ConfigManager:
             logging.info(f"Xcel configuration successfully saved to {self.config_file}")
             return True
         except Exception as e:
-            logging.error(f"Failed to save configuration to {self.config_file}: {e}")
+            logging.error(f"Failed to save configuration to {self.config_file}: {e}", exc_info=True)
             return False

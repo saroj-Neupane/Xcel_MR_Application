@@ -41,11 +41,8 @@ class PoleMapperApp:
             
             # Initialize managers and paths
             self.base_dir = Utils.get_base_directory()
-            logging.debug(f"Base directory: {self.base_dir}")
-            
             self.config_manager = ConfigManager(self.base_dir)
-            self.cache_file = self.base_dir / "geocode_cache.csv"
-
+            
             # Store recent-paths file in the same directory as main.py / executable
             self.paths_file = self.base_dir / "last_paths.json"
             self.last_paths = self.load_last_paths()
@@ -61,7 +58,6 @@ class PoleMapperApp:
             
             # Create GUI
             self.create_widgets()
-            self.geocoder = None
             
             # Initialization complete - allow auto-saving
             self._is_initializing = False
@@ -72,9 +68,6 @@ class PoleMapperApp:
             
             # Setup auto-save
             self.auto_save_config()
-            
-            # Setup exception handling
-            sys.excepthook = self.global_exception_handler
             
             logging.info("Pole Mapper application initialized successfully")
             
@@ -110,7 +103,6 @@ class PoleMapperApp:
                     ]:
                         p = loaded_paths.get(key, "")
                         if p and not Path(p).exists():
-                            logging.info(f"Saved path for '{key}' no longer exists – clearing it")
                             loaded_paths[key] = ""
 
                     # Validate last_directory
@@ -121,7 +113,7 @@ class PoleMapperApp:
 
                     default_paths.update(loaded_paths)
         except Exception as e:
-            logging.error(f"Error loading last paths: {e}")
+            logging.error(f"Error loading last paths: {e}", exc_info=True)
         
         return default_paths
 
@@ -143,10 +135,8 @@ class PoleMapperApp:
             
             with open(self.paths_file, 'w') as f:
                 json.dump(paths, f, indent=2)
-            
-            logging.debug("Saved last paths and configuration to JSON")
         except Exception as e:
-            logging.error(f"Error saving last paths: {e}")
+            logging.error(f"Error saving last paths: {e}", exc_info=True)
 
 
 
@@ -874,7 +864,7 @@ TIPS:
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_dir)
-            logging.info(f"Extracted ZIP to directory: {extract_dir}")
+            logging.info(f"Extracted ZIP to {extract_dir.name}")
             
             node_file, midspan_file = self._find_zip_targets(extract_dir)
             if node_file:
@@ -994,29 +984,19 @@ TIPS:
             has_existing_reports = bool(self.existing_reports_var.get())
             has_proposed_reports = bool(self.proposed_reports_var.get())
             
-            # Validate file combinations - Template + PDF Reports is sufficient
-            # No additional validation needed - template-only processing is supported
-            
-            if not has_existing_reports and not has_proposed_reports:
-                logging.warning("No PDF report folders provided. PDF data (Structure Type, Existing Load, Proposed Load) will not be populated.")
-            
-            logging.info(f"File combination: Main={has_main_sheet}, Attachment={has_attachment_sheet}, Template={bool(output_path)}, Existing Reports={has_existing_reports}, Proposed Reports={has_proposed_reports}")
-            
-            # Log what data will be populated
-            data_sources = []
+            # Log data sources
+            sources = []
             if has_main_sheet:
-                data_sources.append("Main Sheet (nodes, connections, sections)")
+                sources.append("nodes/connections")
             if has_attachment_sheet:
-                data_sources.append("Attachment Sheet (SCID data)")
-            if has_existing_reports:
-                data_sources.append("Existing Reports (structure type, existing load)")
-            if has_proposed_reports:
-                data_sources.append("Proposed Reports (proposed load)")
+                sources.append("attachments")
+            if has_existing_reports or has_proposed_reports:
+                sources.append("PDF reports")
             
-            if data_sources:
-                logging.info(f"Data will be populated from: {', '.join(data_sources)}")
+            if sources:
+                logging.info(f"Processing: {', '.join(sources)}")
             else:
-                logging.info("Only template data will be used (no additional data sources)")
+                logging.info("Processing template only")
 
             # Reset stop flag and update UI
             self.stop_processing = False
@@ -1087,9 +1067,8 @@ TIPS:
                 nodes_df = pd.read_excel(input_file, sheet_name='nodes', dtype=str).fillna("")
                 connections_df = pd.read_excel(input_file, sheet_name='connections', dtype=str).fillna("")
                 sections_df = pd.read_excel(input_file, sheet_name='sections', dtype=str).fillna("")
-                logging.info(f"Read {len(nodes_df)} nodes, {len(connections_df)} connections, {len(sections_df)} sections")
+                logging.info(f"Loaded {len(nodes_df)} nodes, {len(connections_df)} connections")
             else:
-                logging.info("No main input file provided - creating empty dataframes")
                 nodes_df = pd.DataFrame()
                 connections_df = pd.DataFrame()
                 sections_df = pd.DataFrame()
@@ -1108,28 +1087,21 @@ TIPS:
                 nodes_df_copy['scid'] = nodes_df_copy['scid'].apply(lambda x: Utils.normalize_scid(x, ignore_keywords))
                 valid_nodes = Utils.filter_valid_nodes(nodes_df_copy)
                 valid_scids = valid_nodes['scid'].tolist()
-                logging.info(f"Found {len(valid_scids)} valid SCIDs from nodes data")
+                logging.info(f"Found {len(valid_scids)} valid SCIDs")
             else:
-                logging.info("No nodes data available - will process all attachment data")
-
-            # Initialize geocoder (disabled)
-            geocoder = None
+                valid_scids = []
 
             # Read attachment data if provided
             attachment_reader = None
             if attachment_file:
                 if not progress_callback(25, "Reading attachment data..."):
-                    logging.info("Processing stopped by user request")
+                    logging.info("Stopped by user")
                     self.root.after(0, self.reset_process_button)
                     return
                 attachment_reader = AttachmentDataReader(attachment_file, config=self.config, valid_scids=valid_scids)
-                logging.info("Attachment data reader initialized")
-            else:
-                logging.info("No attachment data file provided - attachment data will not be processed")
 
             # QC reader disabled
             qc_reader = None
-            logging.info("Processing all connections without QC filtering")
 
             # Initialize Alden QC reader if file is provided
             alden_qc_reader = None
@@ -1138,14 +1110,10 @@ TIPS:
                 try:
                     alden_qc_reader = AldenQCReader(alden_qc_file_path)
                     if alden_qc_reader.is_active():
-                        logging.info(f"Alden QC reader initialized with {len(alden_qc_reader.get_all_poles())} poles")
-                    else:
-                        logging.warning("Alden QC reader failed to initialize")
+                        logging.info(f"Loaded Alden QC with {len(alden_qc_reader.get_all_poles())} poles")
                 except Exception as e:
-                    logging.error(f"Error initializing Alden QC reader: {e}")
+                    logging.error(f"Error loading Alden QC: {e}")
                     alden_qc_reader = None
-            else:
-                logging.info("No Alden QC file provided - Alden comparison will not be performed")
 
             if not progress_callback(30, "Initializing data processor..."):
                 logging.info("Processing stopped by user request")
@@ -1157,33 +1125,23 @@ TIPS:
             existing_reports_folder = self.existing_reports_var.get() if hasattr(self, 'existing_reports_var') else ""
             proposed_reports_folder = self.proposed_reports_var.get() if hasattr(self, 'proposed_reports_var') else ""
             
-            logging.info(f"GUI: Raw PDF folder paths from UI - Existing: '{existing_reports_folder}', Proposed: '{proposed_reports_folder}'")
-            
             # Normalize paths for Windows compatibility
             if existing_reports_folder:
                 existing_reports_folder = str(Path(existing_reports_folder).resolve())
-                logging.info(f"GUI: Resolved existing reports folder: {existing_reports_folder}")
             if proposed_reports_folder:
                 proposed_reports_folder = str(Path(proposed_reports_folder).resolve())
-                logging.info(f"GUI: Resolved proposed reports folder: {proposed_reports_folder}")
-            
-            logging.info(f"GUI: Final PDF folder paths - Existing: '{existing_reports_folder}', Proposed: '{proposed_reports_folder}'")
             
             if existing_reports_folder or proposed_reports_folder:
                 try:
-                    # Get ignore keywords from config for PDF filename normalization
                     ignore_keywords = self.config.get("ignore_scid_keywords", [])
                     pdf_reader = PDFReportReader(existing_reports_folder, proposed_reports_folder, ignore_keywords)
-                    logging.info(f"Initialized PDF reader with existing folder: {existing_reports_folder}, proposed folder: {proposed_reports_folder}")
+                    logging.info("PDF reader initialized")
                 except Exception as e:
                     logging.error(f"Error initializing PDF reader: {e}")
                     pdf_reader = None
-            else:
-                logging.warning("No PDF folder paths provided - PDF data will not be extracted")
             
             processor = PoleDataProcessor(
                 config=self.config,
-                geocoder=geocoder,
                 mapping_data=self.mapping_data,
                 attachment_reader=attachment_reader,
                 qc_reader=qc_reader,
@@ -1199,9 +1157,7 @@ TIPS:
             
             template_scids = processor.read_template_scids(output_file)
             if template_scids:
-                logging.info(f"Found {len(template_scids)} connections in template - processing only these")
-            else:
-                logging.warning("Could not read template connections - processing all connections")
+                logging.info(f"Processing {len(template_scids)} template connections")
 
             # Process data
             if not progress_callback(40, "Processing pole data..."):
@@ -1231,9 +1187,6 @@ TIPS:
                 progress_callback(0, "Failed to generate output file!")
                 return
             
-            # Check if a unique filename was generated (indicates original file was open)
-            if "_" in actual_output_file.name and any(char.isdigit() for char in actual_output_file.name.split("_")[-1]):
-                logging.info(f"Original file was open in another application. Generated unique filename: {actual_output_file.name}")
 
             # Write output to the newly created file
             progress_callback(90, "Writing output file...")
@@ -1249,15 +1202,13 @@ TIPS:
             if self.open_output_var.get():
                 self.root.after(1000, lambda: self.open_output_file(str(actual_output_file)))
 
-            # Log success message
-            logging.info(f"Processing completed successfully! Processed {len(result_data)} poles. Output saved to: {actual_output_file}")
+            logging.info(f"✓ Processed {len(result_data)} poles → {actual_output_file.name}")
             
             # Reset button on completion
             self.root.after(0, self.reset_process_button)
 
         except Exception as e:
             logging.error(f"Error during processing: {e}", exc_info=True)
-            logging.error(f"An error occurred during processing: {e}")
             progress_callback(0, "Processing failed!")
             # Reset button on error
             self.root.after(0, self.reset_process_button)
@@ -1272,12 +1223,11 @@ TIPS:
         if not template_path.exists():
             logging.error(f"Output template file not found: {output_template}")
             return None
-            
+        
         # Create output directory in the same location as the template
         output_dir = template_path.parent / "output"
         output_dir.mkdir(exist_ok=True)
-        logging.info(f"Created/verified output directory: {output_dir}")
-            
+        
         # Always use .xlsx format for output files
         base_filename = f"{job_name} Spread Sheet.xlsx"
         
@@ -1497,16 +1447,3 @@ TIPS:
         except Exception as e:
             logging.error(f"Error during application close: {e}")
             self.root.destroy()
-    
-    def global_exception_handler(self, exc_type, exc_value, exc_traceback):
-        """Handle uncaught exceptions"""
-        if issubclass(exc_type, KeyboardInterrupt):
-            sys.__excepthook__(exc_type, exc_value, exc_traceback)
-            return
-        
-        if issubclass(exc_type, RecursionError):
-            logging.error("Recursion error detected. Application will exit.")
-        else:
-            logging.error(f"An unexpected error occurred: {exc_value}")
-            
-        # Continue execution without showing message box

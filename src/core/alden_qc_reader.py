@@ -111,7 +111,7 @@ class AldenQCReader:
             
             # Read the specific sheet with header in row 3
             df = pd.read_excel(alden_qc_file_path, sheet_name='Poles_Joint Use Attachment', header=2)
-            logging.info(f"Read {len(df)} rows from Alden QC file")
+            logging.info(f"Loaded {len(df)} Alden QC rows")
             
             # Store the raw DataFrame for later use
             self._raw_dataframe = df
@@ -242,14 +242,10 @@ class AldenQCReader:
             self._active = len(self.qc_data) > 0
             self.alden_qc_file_path = alden_qc_file_path
             
-            logging.info(f"Loaded Alden QC file: {len(self.qc_data)} poles found")
-            logging.debug(f"Sample poles: {list(self.qc_data.keys())[:5]}")
-            logging.info(f"Loaded MetroNet heights for {len(self.metronet_heights)} poles")
-            logging.info(f"Loaded Power heights for {len(self.power_heights)} poles")
-            logging.info(f"Loaded Communication heights for {len(self.comm_heights)} poles")
+            logging.info(f"Loaded {len(self.qc_data)} poles, {len(self.metronet_heights)} MetroNet, {len(self.comm_heights)} comm")
             
         except Exception as e:
-            logging.error(f"Error loading Alden QC file {alden_qc_file_path}: {e}")
+            logging.error(f"Error loading Alden QC file {alden_qc_file_path}: {e}", exc_info=True)
             self._active = False
     
     def is_active(self):

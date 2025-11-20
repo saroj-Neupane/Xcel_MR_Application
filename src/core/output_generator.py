@@ -17,38 +17,54 @@ class OutputGenerator:
     def write_output(self, result_data, output_file):
         """Write processed data to Excel output file"""
         try:
-            # Filter out empty or invalid data - ensure both Pole and To Pole exist
+            # Filter out empty or invalid data
+            # For template-only mode, allow rows with only Pole (To Pole can be empty/N/A)
+            # For normal mode, require both Pole and To Pole
             original_count = len(result_data)
             filtered_data = []
             filtered_out_count = 0
             
             for row in result_data:
-                # Check if row exists and has valid Pole and To Pole data
+                # Check if row exists and has valid Pole data
                 pole_val = row.get('Pole', '') if row else ''
                 to_pole_val = row.get('To Pole', '') if row else ''
                 
-                # Validate that both values exist and are not empty/whitespace
-                if (row and 
-                    pole_val and 
-                    to_pole_val and 
-                    str(pole_val).strip() != '' and 
-                    str(to_pole_val).strip() != ''):
-                    filtered_data.append(row)
+                # Check if this is a template-only row (has _excel_row and may have PDF data)
+                is_template_only = '_excel_row' in row
+                has_pdf_data = any(row.get(key) for key in ['Structure Type', 'Existing Load', 'Proposed Load'])
+                
+                # Validate: Pole must exist, To Pole required only if not template-only or if row has connection data
+                pole_valid = pole_val and str(pole_val).strip() != ''
+                
+                if is_template_only or has_pdf_data:
+                    # Template-only mode: Pole is required, To Pole is optional
+                    if row and pole_valid:
+                        filtered_data.append(row)
+                    else:
+                        filtered_out_count += 1
+                        logging.debug(f"Filtered out template-only row: Pole='{pole_val}', To Pole='{to_pole_val}'")
                 else:
-                    filtered_out_count += 1
-                    logging.debug(f"Filtered out row: Pole='{pole_val}', To Pole='{to_pole_val}'")
+                    # Normal mode: Both Pole and To Pole required
+                    to_pole_valid = to_pole_val and str(to_pole_val).strip() != ''
+                    if row and pole_valid and to_pole_valid:
+                        filtered_data.append(row)
+                    else:
+                        filtered_out_count += 1
+                        logging.debug(f"Filtered out row: Pole='{pole_val}', To Pole='{to_pole_val}'")
             
-            logging.info(f"Data filtering: {original_count} total rows, {len(filtered_data)} valid rows, {filtered_out_count} filtered out")
+            if filtered_out_count > 0:
+                logging.debug(f"Filtered out {filtered_out_count} invalid rows")
             
             if not filtered_data:
-                logging.warning("No valid data to write after filtering")
+                logging.warning("No valid data to write")
                 return
 
             # Sort data using shared utility function
             sorted_data = sorted(filtered_data, key=lambda x: Utils.extract_numeric_part(x.get('Pole', '')))
 
             # Create data cache for QC sheet population
-            self._processed_data_cache = {}
+            # Clear previous cache to prevent stale data
+            self._processed_data_cache.clear()
             for row in sorted_data:
                 pole = row.get('Pole', '').strip()
                 if pole:
@@ -64,6 +80,7 @@ class OutputGenerator:
                 return
 
             # Attempt to load the workbook from template inside a try/except block to catch EOFError
+            # Always load fresh to avoid stale template data (template may have been modified externally)
             try:
                 # Use keep_vba=True only for .xlsm files, not for .xlsx files
                 if template_path.suffix.lower() == '.xlsm':
@@ -97,20 +114,15 @@ class OutputGenerator:
 
             # Automatically populate QC sheet if QC reader is active
             if self.qc_reader and self.qc_reader.is_active():
-                logging.info("QC reader is active - populating QC sheet")
+                logging.info("Populating QC sheet")
                 self._populate_qc_sheet(wb)
-                
-                # Add conditional formatting to compare main sheet and QC sheet
-                logging.info("Adding conditional formatting to compare main sheet and QC sheet")
                 self._add_sheet_comparison_formatting(wb, worksheet_name)
-            else:
-                logging.info("QC reader not active - skipping QC sheet population")
 
             wb.save(output_file)
-            logging.info(f"Successfully wrote {len(sorted_data)} records to {output_file}")
+            logging.info(f"Wrote {len(sorted_data)} records")
 
         except Exception as e:
-            logging.error(f"Error writing output: {e}")
+            logging.error(f"Error writing output: {e}", exc_info=True)
             raise
     
     def _write_data_to_worksheet(self, ws, sorted_data, mapping_data):
@@ -153,8 +165,6 @@ class OutputGenerator:
                     internal_key = self._get_internal_key(element, attribute)
                     value = row_data.get(internal_key, "")
                     ws.cell(row=excel_row, column=col_idx).value = value
-        
-        logging.info(f"Wrote {len(sorted_data)} rows using column mappings (preserving Pole and ToPole from template)")
     
     def _write_data_simple(self, ws, sorted_data):
         """Simple data writing without mappings"""
@@ -182,8 +192,6 @@ class OutputGenerator:
                 if header.lower() not in ['pole', 'to pole']:
                     value = row_data.get(header, "")
                     ws.cell(row=excel_row, column=col_idx).value = value
-        
-        logging.info(f"Wrote {len(sorted_data)} rows using simple format (preserving Pole and ToPole from template)")
     
     def _get_internal_key(self, element, attribute):
         """Get the internal key used in row data for a given element/attribute mapping"""
@@ -264,11 +272,10 @@ class OutputGenerator:
         # For now, we'll keep a simplified version
         try:
             if "QC" not in workbook.sheetnames:
-                logging.info("No existing QC sheet found, skipping QC data population")
                 return
             
-            logging.info("QC sheet population would be implemented here")
-            # Implementation would be moved from PoleDataProcessor
+            # QC sheet population implementation
+            # (would be moved from PoleDataProcessor)
             
         except Exception as e:
             logging.error(f"Error populating QC sheet: {e}")
@@ -276,8 +283,8 @@ class OutputGenerator:
     def _add_sheet_comparison_formatting(self, workbook, main_sheet_name):
         """Add conditional formatting to compare sheets"""
         try:
-            logging.info("Sheet comparison formatting would be implemented here")
-            # Implementation would be moved from PoleDataProcessor
+            # Sheet comparison formatting implementation
+            # (would be moved from PoleDataProcessor)
             
         except Exception as e:
             logging.error(f"Error adding sheet comparison formatting: {e}")
@@ -292,7 +299,6 @@ class OutputGenerator:
             # Create output directory in the same location as the template
             output_dir = template_path.parent / "output"
             output_dir.mkdir(exist_ok=True)
-            logging.info(f"Created/verified output directory: {output_dir}")
             
             # Create output filename (always .xlsx format)
             output_filename = f"{job_name}_MR_SS.xlsx"
@@ -301,8 +307,6 @@ class OutputGenerator:
             # Copy template to output location
             import shutil
             shutil.copy2(template_path, output_path)
-            
-            logging.info(f"Generated output file: {output_path}")
             return str(output_path)
             
         except Exception as e:

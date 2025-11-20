@@ -1,11 +1,7 @@
-import os
 import sys
 import re
-import json
 import logging
 from pathlib import Path
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 
 class Utils:
