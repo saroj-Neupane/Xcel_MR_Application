@@ -26,7 +26,8 @@ class AttachmentDataReader:
             xls = pd.ExcelFile(self.file_path)
             scid_sheets = [sheet for sheet in xls.sheet_names if sheet.startswith("SCID ")]
             
-            logging.info(f"Found {len(scid_sheets)} SCID sheets")
+            loaded_count = 0
+            skipped_count = 0
             
             for sheet_name in scid_sheets:
                 scid = sheet_name[5:].strip()
@@ -34,27 +35,28 @@ class AttachmentDataReader:
                 scid = Utils.normalize_scid(scid, ignore_keywords)
                 
                 if self.valid_scids is not None and scid not in self.valid_scids:
-                    logging.debug(f"Skipping SCID '{scid}' - not in valid set")
+                    skipped_count += 1
                     continue
                 
                 try:
                     df = pd.read_excel(self.file_path, sheet_name=sheet_name, header=1)
                     df = df.fillna("")
                     
-                    logging.debug(f"Loaded {len(df)} records for SCID '{scid}'")
-                    
                     df.columns = df.columns.str.strip().str.lower()
                     required_cols = ['company', 'measured', 'height_in_inches']
                     missing_cols = [col for col in required_cols if col not in df.columns]
                     if missing_cols:
                         logging.warning(f"Sheet '{sheet_name}' missing columns: {missing_cols}")
+                        skipped_count += 1
                         continue
                     
                     self.attachment_data[scid] = df
+                    loaded_count += 1
                 except Exception as e:
                     logging.error(f"Error reading sheet '{sheet_name}': {e}")
+                    skipped_count += 1
             
-            logging.info(f"Loaded {len(self.attachment_data)} valid SCIDs")
+            logging.info(f"Loaded {loaded_count} SCID sheets" + (f", skipped {skipped_count}" if skipped_count > 0 else ""))
             if not self.attachment_data:
                 logging.error("No valid SCID data found in attachment file")
         except Exception as e:
@@ -65,8 +67,6 @@ class AttachmentDataReader:
         ignore_keywords = self.config.get('ignore_scid_keywords', [])
         normalized_scid = Utils.normalize_scid(scid, ignore_keywords)
         data = self.attachment_data.get(normalized_scid, pd.DataFrame())
-        if data.empty:
-            logging.debug(f"No attachment data found for SCID {scid} (normalized: {normalized_scid})")
         return data
 
     def find_power_attachment(self, scid, power_keywords):
@@ -214,7 +214,6 @@ class AttachmentDataReader:
                         for height_col in all_height_cols:
                             if height_col in row and pd.notna(row[height_col]) and str(row[height_col]).strip():
                                 height_value = row[height_col]
-                                logging.debug(f"Found height data in column '{height_col}' for equipment {normalized_keyword} in SCID {scid}")
                                 break
                         
                         if height_value is not None:
@@ -239,14 +238,8 @@ class AttachmentDataReader:
                                             'height_decimal': height_inches / 12,
                                             'measured': row.get('measured', '')
                                         })
-                                    else:
-                                        logging.debug(f"Could not format height for {display_name}")
-                                else:
-                                    logging.debug(f"Invalid height for {display_name}")
                             except Exception as e:
-                                logging.warning(f"Error processing {display_name} height: {e}")
-                        else:
-                            logging.debug(f"No height data for {display_name}")
+                                logging.warning(f"Error processing equipment height for SCID {scid}: {e}")
                         # Remove break to allow multiple keywords to match in the same row
             
             if all_equipment:
@@ -294,13 +287,10 @@ class AttachmentDataReader:
         """Find telecom attachments for a SCID and combine multiple heights in the same cell."""
         df = self.get_scid_data(scid)
         if df.empty:
-            logging.warning(f"No data found for SCID {scid}")
             return {}
         
         attachments = {}
         try:
-            logging.debug(f"Available columns for SCID {scid}: {list(df.columns)}")
-            
             if 'height_in_inches' not in df.columns:
                 logging.error(f"'height_in_inches' column missing for SCID {scid}")
                 return {}
@@ -326,46 +316,22 @@ class AttachmentDataReader:
                     """
                     measured_clean = str(measured_text).strip().lower()
                     
-                    # Debug: Show detailed matching for each keyword
-                    if measured_clean:  # Only debug if there's actual measured data
-                        logging.debug(f"AttachmentDataReader - Checking measured text: '{measured_text}' -> cleaned: '{measured_clean}'")
-                        for kw in comm_keywords:
-                            kw_clean = kw.strip().lower()
-                            # Check for wildcard or exact match
-                            if kw_clean == 'guy':
-                                # Special case: Guy always exact match
-                                match_result = kw_clean == measured_clean
-                            elif kw_clean.endswith('*'):
-                                # Wildcard match: substring
-                                match_result = kw_clean[:-1] in measured_clean
-                            else:
-                                # Exact match
-                                match_result = kw_clean == measured_clean
-                            logging.debug(f"  Keyword '{kw}' -> '{kw_clean}' == '{measured_clean}' ? {match_result}")
-                    
                     # Check if any keyword matches
-                    matched = False
                     for kw in comm_keywords:
                         kw_clean = kw.strip().lower()
                         if kw_clean == 'guy':
                             # Special case: Guy always exact match
                             if kw_clean == measured_clean:
-                                matched = True
-                                break
+                                return True
                         elif kw_clean.endswith('*'):
                             # Wildcard match: substring
                             if kw_clean[:-1] in measured_clean:
-                                matched = True
-                                break
+                                return True
                         else:
                             # Exact match
                             if kw_clean == measured_clean:
-                                matched = True
-                                break
-                    
-                    if matched:
-                        logging.debug(f"Communication keyword match: '{measured_text}' -> '{measured_clean}' matches keywords: {comm_keywords}")
-                    return matched
+                                return True
+                    return False
                 
                 # For "Power Guy" keyword, company name must be in company column, not measured column
                 if 'power guy' in [kw.lower() for kw in comm_keywords]:
@@ -390,7 +356,6 @@ class AttachmentDataReader:
                     ]
                 
                 if not provider_rows.empty:
-                    logging.debug(f"Found {len(provider_rows)} {provider} attachments for SCID {scid}")
                     # Clean and convert height data with better error handling
                     def clean_height_value(height_val):
                         """Clean height value and convert to numeric"""
@@ -409,9 +374,6 @@ class AttachmentDataReader:
                     
                     # Filter out rows with invalid height data
                     valid_rows = provider_rows.dropna(subset=['height_numeric'])
-                    invalid_count = len(provider_rows) - len(valid_rows)
-                    if invalid_count > 0:
-                        logging.debug(f"Skipped {invalid_count} invalid heights for {provider}")
                     
                     if not valid_rows.empty:
                         valid_rows = valid_rows.sort_values(by='height_numeric', ascending=False)
@@ -445,11 +407,6 @@ class AttachmentDataReader:
                                 'company': valid_rows.iloc[0]['company'],
                                 'measured': valid_rows.iloc[0]['measured']
                             }
-                            logging.debug(f"Added {provider}: {combined_heights}")
-                        else:
-                            logging.debug(f"No valid heights for {provider}")
-                    else:
-                        logging.debug(f"No valid data for {provider}")
             return attachments
         except Exception as e:
             logging.error(f"Error processing telecom attachments for SCID {scid}: {e}")
@@ -556,9 +513,6 @@ class AttachmentDataReader:
                 
                 if not is_metronet:
                     count += 1
-                    logging.debug(f"Counted riser: {company} - {measured}")
-                else:
-                    logging.debug(f"Excluded MetroNet riser: {company} - {measured}")
             
             return count
             
